@@ -21,9 +21,14 @@ class MF52 : public tam::ocd::interfaces::TireModelBase
     double PCY1, PDY1, PDY2, PDY3, PEY1, PEY2, PEY3, PEY4, PKY1, PKY2, PKY3, PHY1, PHY2, PHY3, PVY1,
       PVY2, PVY3, PVY4, RBY1, RBY2, RBY3, RCY1, REY1, REY2, RHY1, RHY2, RVY1, RVY2, RVY3, RVY4,
       RVY5, RVY6, PTY1, PTY2, PEY5, PKY4, PKY5, PKY6, PKY7, PPY1, PPY2, PPY3, PPY4, PPY5, RBY4;
+    double NOMPRES{1.0}, PPX1{0.}, PPX2{0.}, PPX3{0.}, PPX4{0.};
     // Scaling Factors
     double LFZO, LCX, LMUX, LEX, LKX, LHX, LVX, LGAX, LCY, LMUY, LEY, LKY, LKYG, LHY, LVY, LGAY,
       LTR, LRES, LGAZ, LXAL, LYKA, LVYKA, LS, LSGKP, LSGAL, LGYR, LMX, LVMX, LMY;
+    double FITTYP, UNLOADED_RADIUS, FZMIN, LKYC, LKZC, QSX1, QSX2, QSX3, QSX4, QSX5, QSX6, QSX7,
+      QSX8, QSX9, QSX10, QSX11, QSX12, QSX13, QSX14, PPMX1, QBZ1, QBZ2, QBZ3, QBZ4, QBZ5, QBZ9,
+      QBZ10, QCZ1, QDZ1, QDZ2, QDZ3, QDZ4, QDZ6, QDZ7, QDZ8, QDZ9, QDZ10, QDZ11, QEZ1, QEZ2, QEZ3,
+      QEZ4, QEZ5, QHZ1, QHZ2, QHZ3, QHZ4, PPZ1, PPZ2, SSZ1, SSZ2, SSZ3, SSZ4;
     // Other Params
     double FNOMIN;
   } p_;
@@ -35,8 +40,9 @@ public:
   void register_log_signals(tam::tsl::ReferenceLogger *, std::string = "") const override {}
 
 private:
-  double long_force_pure_slip(double F_z, double kappa) const;
-  double lat_force_pure_slip(double F_z, double alpha, double gamma) const;
+  types::TireModelOutput evaluate62(types::TireModelInput const &) const;
+  double long_force_pure_slip(double F_z, double kappa, double dp = 0.) const;
+  double lat_force_pure_slip(double F_z, double alpha, double gamma, double dp = 0.) const;
   double long_force_combined_slip(
     double F_z, double kappa, double alpha, double long_force_pure_slip, double gamma) const;
   double lat_force_combined_slip(

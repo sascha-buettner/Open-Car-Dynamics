@@ -34,8 +34,8 @@ public:
   void set_load(const DoublePerWheelType & steering_load_torque_per_wheel_Nm) override;
   // Model step function
   void evaluate() override;
-
   // getters
+  double get_mean_steering_rate() const { return x_dot_vec_[x::position_rad]; }
   DoublePerWheelType get_steering_angles() const override;
   FeedbackType get_feedback() const override;
   StateVectorType get_x_vec() const override;
@@ -47,6 +47,13 @@ private:
   struct Parameters
   {
     double T_PT1, angle_max_rad, angle_rate_max_radps, static_offset_rad;
+    double angle_rate_rise_max_radps, angle_rate_fall_max_radps;
+    bool use_damped_pt2;
+    double natural_frequency_hz, damping_ratio;
+    // Standard Ackermann fraction: (cot outer - cot inner)/(track/wheelbase).
+    // Zero retains bit-identical parallel steering. Tables use absolute mean angle.
+    double ackermann_track_m, ackermann_wheelbase_m;
+    std::vector<double> ackermann_mean_angle_rad, ackermann_fraction;
   } p_;
   StateVectorType x_vec_ = StateVectorType::Zero();
   StateVectorType x_dot_vec_ = StateVectorType::Zero();

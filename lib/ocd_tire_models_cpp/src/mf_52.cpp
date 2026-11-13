@@ -1,13 +1,21 @@
 // Copyright 2026 Simon Sagmeister
 
 #include "ocd_tire_models_cpp/mf_52.hpp"
+
+#include <algorithm>
+#include <stdexcept>
 namespace tam::ocd::tire_models
 {
 types::TireModelOutput MF52::evaluate(types::TireModelInput const & input)
 {
+  if (p_.FITTYP == 62.) return evaluate62(input);
   types::TireModelOutput out;
-  double F_x_o = long_force_pure_slip(input.F_z_N, input.longitudinal_slip);
-  double F_y_o = lat_force_pure_slip(input.F_z_N, -input.slip_angle_rad, input.gamma_rad);
+  if (!(std::isfinite(input.inflation_pressure_Pa) && input.inflation_pressure_Pa > 0. &&
+        p_.NOMPRES > 0.))
+    throw std::invalid_argument("Tire gauge pressure and nominal pressure must be positive");
+  const double dp = (input.inflation_pressure_Pa - p_.NOMPRES) / p_.NOMPRES;
+  double F_x_o = long_force_pure_slip(input.F_z_N, input.longitudinal_slip, dp);
+  double F_y_o = lat_force_pure_slip(input.F_z_N, -input.slip_angle_rad, input.gamma_rad, dp);
   out.longitudinal_force_N = long_force_combined_slip(
     input.F_z_N, input.longitudinal_slip, -input.slip_angle_rad, F_x_o, input.gamma_rad);
   out.lateral_force_N = lat_force_combined_slip(
@@ -15,7 +23,7 @@ types::TireModelOutput MF52::evaluate(types::TireModelInput const & input)
   // Implement MF52 in here
   return out;
 }
-double MF52::long_force_pure_slip(double F_z, double kappa) const
+double MF52::long_force_pure_slip(double F_z, double kappa, double dp) const
 {
   double F_z_o_a = p_.LFZO * p_.FNOMIN;
   double dfz = (F_z - F_z_o_a) / F_z_o_a;
@@ -23,11 +31,12 @@ double MF52::long_force_pure_slip(double F_z, double kappa) const
   double S_V_x = F_z * (p_.PVX1 + p_.PVX2 * dfz) * p_.LVX * p_.LMUX;
   double kappa_x = kappa + S_H_x;
   double C_x = p_.PCX1 * p_.LCX;
-  double mu_x = (p_.PDX1 + p_.PDX2 * dfz) * p_.LMUX;
+  double mu_x = (p_.PDX1 + p_.PDX2 * dfz) * (1. + p_.PPX3 * dp + p_.PPX4 * dp * dp) * p_.LMUX;
   double D_x = mu_x * F_z;
   double E_x = (p_.PEX1 + p_.PEX2 * dfz + p_.PEX3 * std::pow(dfz, 2)) *
                (1.0 - p_.PEX4 * std::copysign(1.0, kappa_x)) * p_.LEX;
-  double K_x = F_z * (p_.PKX1 + p_.PKX2 * dfz) * std::exp(p_.PKX3 * dfz) * p_.LKX;
+  double K_x = F_z * (p_.PKX1 + p_.PKX2 * dfz) * std::exp(p_.PKX3 * dfz) *
+               (1. + p_.PPX1 * dp + p_.PPX2 * dp * dp) * p_.LKX;
   double B_x = K_x / (C_x * D_x);
   // Longitudinal Force (pure longitudinal slip)
   double F_x_o =
@@ -36,21 +45,25 @@ double MF52::long_force_pure_slip(double F_z, double kappa) const
     S_V_x;
   return F_x_o;
 }
-double MF52::lat_force_pure_slip(double F_z, double alpha, double gamma) const
+double MF52::lat_force_pure_slip(double F_z, double alpha, double gamma, double dp) const
 {
   double gamma_s = std::sin(gamma);
   double F_z_o_a = p_.LFZO * p_.FNOMIN;
   double dfz = (F_z - F_z_o_a) / F_z_o_a;
-  double K_y_g_o = F_z * (p_.PKY6 + p_.PKY7 * dfz) * p_.LKYG;
+  double K_y_g_o = F_z * (p_.PKY6 + p_.PKY7 * dfz) * (1. + p_.PPY5 * dp) * p_.LKYG;
   double S_V_y_g = F_z * (p_.PVY3 + p_.PVY4 * dfz) * gamma_s * p_.LKYG * p_.LMUY;
   double S_V_y = F_z * (p_.PVY1 + p_.PVY2 * dfz) * p_.LVY * p_.LMUY + S_V_y_g;
   double K_y =
     p_.PKY1 * F_z_o_a * (1.0 - p_.PKY3 * std::abs(gamma_s)) *
-    std::sin(p_.PKY4 * std::atan(F_z / ((p_.PKY2 + p_.PKY5 * std::pow(gamma_s, 2)) * F_z_o_a))) *
-    p_.LKY;
+    std::sin(
+      p_.PKY4 *
+      std::atan(
+        F_z / ((p_.PKY2 + p_.PKY5 * std::pow(gamma_s, 2)) * F_z_o_a * (1. + p_.PPY2 * dp)))) *
+    (1. + p_.PPY1 * dp) * p_.LKY;
   double S_H_y = (p_.PHY1 + p_.PHY2 * dfz) * p_.LHY + (K_y_g_o * gamma_s - S_V_y_g) / K_y;
   double C_y = p_.PCY1 * p_.LCY;
-  double mu_y = ((p_.PDY1 + p_.PDY2 * dfz) * (1.0 - p_.PDY3 * std::pow(gamma_s, 2))) * p_.LMUY;
+  double mu_y = ((p_.PDY1 + p_.PDY2 * dfz) * (1.0 - p_.PDY3 * std::pow(gamma_s, 2))) *
+                (1. + p_.PPY3 * dp + p_.PPY4 * dp * dp) * p_.LMUY;
   double D_y = mu_y * F_z;
   double B_y = K_y / (C_y * D_y);
   double alpha_y = alpha + S_H_y;
@@ -113,6 +126,165 @@ double MF52::lat_force_combined_slip(
 void MF52::declare_parameters(
   tam::pmg::ParamReferenceManager * param_manager, std::string name_prefix)
 {
+  param_manager->declare_parameter(
+    name_prefix + "FITTYP", &p_.FITTYP, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "UNLOADED_RADIUS", &p_.UNLOADED_RADIUS, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "FZMIN", &p_.FZMIN, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "LKYC", &p_.LKYC, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "LKZC", &p_.LKZC, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX1", &p_.QSX1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX2", &p_.QSX2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX3", &p_.QSX3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX4", &p_.QSX4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX5", &p_.QSX5, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX6", &p_.QSX6, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX7", &p_.QSX7, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX8", &p_.QSX8, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX9", &p_.QSX9, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX10", &p_.QSX10, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX11", &p_.QSX11, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX12", &p_.QSX12, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX13", &p_.QSX13, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QSX14", &p_.QSX14, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "PPMX1", &p_.PPMX1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ1", &p_.QBZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ2", &p_.QBZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ3", &p_.QBZ3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ4", &p_.QBZ4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ5", &p_.QBZ5, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ9", &p_.QBZ9, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QBZ10", &p_.QBZ10, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QCZ1", &p_.QCZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ1", &p_.QDZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ2", &p_.QDZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ3", &p_.QDZ3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ4", &p_.QDZ4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ6", &p_.QDZ6, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ7", &p_.QDZ7, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ8", &p_.QDZ8, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ9", &p_.QDZ9, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ10", &p_.QDZ10, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QDZ11", &p_.QDZ11, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QEZ1", &p_.QEZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QEZ2", &p_.QEZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QEZ3", &p_.QEZ3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QEZ4", &p_.QEZ4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QEZ5", &p_.QEZ5, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QHZ1", &p_.QHZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QHZ2", &p_.QHZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QHZ3", &p_.QHZ3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "QHZ4", &p_.QHZ4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "PPZ1", &p_.PPZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "PPZ2", &p_.PPZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "SSZ1", &p_.SSZ1, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "SSZ2", &p_.SSZ2, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "SSZ3", &p_.SSZ3, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
+  param_manager->declare_parameter(
+    name_prefix + "SSZ4", &p_.SSZ4, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "MF6.2 manufacturer coefficient; opt-in FITTYP62");
   // clang-format off
   // Long parameters
   param_manager->declare_parameter(name_prefix + "PCX1", &(p_.PCX1), 1.6    , tam::pmg::ParameterType::DOUBLE, "Shape factor Cfx for longitudinal force"); // NOLINT
@@ -183,6 +355,11 @@ void MF52::declare_parameters(
   param_manager->declare_parameter(name_prefix + "PKY5", &(p_.PKY5), 0.0    , tam::pmg::ParameterType::DOUBLE, "Variation of peak stiffness with squared camber"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PKY6", &(p_.PKY6), 0.0    , tam::pmg::ParameterType::DOUBLE, "Lateral force, Fy, camber stiffness factor"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PKY7", &(p_.PKY7), 0.0    , tam::pmg::ParameterType::DOUBLE, "Camber stiffness vertical load dependency"); // NOLINT
+  param_manager->declare_parameter(name_prefix + "NOMPRES", &(p_.NOMPRES), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX1", &(p_.PPX1), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX2", &(p_.PPX2), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX3", &(p_.PPX3), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX4", &(p_.PPX4), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
   param_manager->declare_parameter(name_prefix + "PPY1", &(p_.PPY1), 0.0    , tam::pmg::ParameterType::DOUBLE, "Cornering stiffness variation with inflation pressure"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PPY2", &(p_.PPY2), 0.0    , tam::pmg::ParameterType::DOUBLE, "Cornering stiffness variation with inflation pressure induced nominal load dependency"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PPY3", &(p_.PPY3), 0.0    , tam::pmg::ParameterType::DOUBLE, "Linear inflation pressure on peak lateral friction"); // NOLINT
@@ -228,5 +405,113 @@ void MF52::declare_parameters(
   param_manager->declare_parameter(
     name_prefix + "FNOMIN", &(p_.FNOMIN), 3000.0, tam::pmg::ParameterType::DOUBLE,
     "Nominal wheel load");  // NOLINT
+}
+}  // namespace tam::ocd::tire_models
+// MF6.2 steady combined-slip forces and moments, no turn-slip mode (TIR USE_MODE114).
+// Equations: Besselink et al., MF6.1 extensions; Pacejka4.E9--4.E75.
+// Reference attribution: THIRD_PARTY_LICENSES/MFeval_julia_SOURCE.md.
+namespace tam::ocd::tire_models
+{
+types::TireModelOutput MF52::evaluate62(types::TireModelInput const & u) const
+{
+  types::TireModelOutput out;
+  if (!(std::isfinite(u.inflation_pressure_Pa) && u.inflation_pressure_Pa > 0. && p_.NOMPRES > 0.))
+    throw std::invalid_argument("MF62 requires positive gauge inflation pressure");
+  if (u.F_z_N <= 0.) return out;
+  const double F = u.F_z_N, F0 = p_.LFZO * p_.FNOMIN, d = (F - F0) / F0,
+               dp = (u.inflation_pressure_Pa - p_.NOMPRES) / p_.NOMPRES;
+  const double a = std::tan(-u.slip_angle_rad), g = u.gamma_rad, gs = std::sin(g),
+               k = u.longitudinal_slip;
+  auto safe = [](double x) { return x + std::copysign(1e-6, x); };
+  auto mf = [](double B, double C, double E, double x) {
+    return std::sin(C * std::atan(B * x - E * (B * x - std::atan(B * x))));
+  };
+  auto weight = [&](double B, double C, double E, double x, double shift) {
+    return std::cos(
+             C * std::atan(B * (x + shift) - E * (B * (x + shift) - std::atan(B * (x + shift))))) /
+           safe(std::cos(C * std::atan(B * shift - E * (B * shift - std::atan(B * shift)))));
+  };
+  const double Kx = F * (p_.PKX1 + p_.PKX2 * d) * std::exp(p_.PKX3 * d) *
+                    (1. + p_.PPX1 * dp + p_.PPX2 * dp * dp) * p_.LKX;
+  const double Cx = p_.PCX1 * p_.LCX, Dx = (p_.PDX1 + p_.PDX2 * d) *
+                                           (1. + p_.PPX3 * dp + p_.PPX4 * dp * dp) *
+                                           (1. - p_.PDX3 * g * g) * p_.LMUX * F;
+  const double kx = k + (p_.PHX1 + p_.PHX2 * d) * p_.LHX,
+               Ex = std::min(
+                 1., (p_.PEX1 + p_.PEX2 * d + p_.PEX3 * d * d) *
+                       (1. - p_.PEX4 * std::copysign(1., kx)) * p_.LEX);
+  const double fx0 =
+    Dx * mf(Kx / safe(Cx * Dx), Cx, Ex, kx) + F * (p_.PVX1 + p_.PVX2 * d) * p_.LVX * p_.LMUX;
+  const double Gx = weight(
+    (p_.RBX1 + p_.RBX3 * gs * gs) * std::cos(std::atan(p_.RBX2 * k)) * p_.LXAL, p_.RCX1,
+    std::min(1., p_.REX1 + p_.REX2 * d), a, p_.RHX1);
+  out.longitudinal_force_N = Gx * fx0;
+  struct Lat
+  {
+    double force, K, sh, sv, B, C, mu;
+  };
+  auto lat = [&](double gg) {
+    const double K =
+      p_.PKY1 * F0 * (1. + p_.PPY1 * dp) * (1. - p_.PKY3 * std::abs(gg)) *
+      std::sin(
+        p_.PKY4 * std::atan(F / ((p_.PKY2 + p_.PKY5 * gg * gg) * F0 * (1. + p_.PPY2 * dp)))) *
+      p_.LKY;
+    const double Kcam = F * (p_.PKY6 + p_.PKY7 * d) * (1. + p_.PPY5 * dp) * p_.LKYC;
+    const double svg = F * (p_.PVY3 + p_.PVY4 * d) * gg * p_.LKYC * p_.LMUY;
+    const double sv = F * (p_.PVY1 + p_.PVY2 * d) * p_.LVY * p_.LMUY + svg;
+    const double sh = (p_.PHY1 + p_.PHY2 * d) * p_.LHY + (Kcam * gg - svg) / safe(K), ay = a + sh,
+                 C = p_.PCY1 * p_.LCY;
+    const double mu = (p_.PDY1 + p_.PDY2 * d) * (1. + p_.PPY3 * dp + p_.PPY4 * dp * dp) *
+                      (1. - p_.PDY3 * gg * gg) * p_.LMUY,
+                 D = mu * F, B = K / safe(C * D);
+    const double E = std::min(
+      1., (p_.PEY1 + p_.PEY2 * d) *
+            (1. + p_.PEY5 * gg * gg - (p_.PEY3 + p_.PEY4 * gg) * std::copysign(1., ay)) * p_.LEY);
+    return Lat{D * mf(B, C, E, ay) + sv, K, sh, sv, B, C, mu};
+  };
+  const auto y = lat(gs), y0 = lat(0.);
+  const double Gy = weight(
+    (p_.RBY1 + p_.RBY4 * gs * gs) * std::cos(std::atan(p_.RBY2 * (a - p_.RBY3))) * p_.LYKA, p_.RCY1,
+    std::min(1., p_.REY1 + p_.REY2 * d), k, p_.RHY1 + p_.RHY2 * d);
+  const double svyk = y.mu * F * (p_.RVY1 + p_.RVY2 * d + p_.RVY3 * gs) *
+                      std::cos(std::atan(p_.RVY4 * a)) *
+                      std::sin(p_.RVY5 * std::atan(p_.RVY6 * k)) * p_.LVYKA;
+  out.lateral_force_N = Gy * y.force + svyk;
+  const double fy = out.lateral_force_N, fx = out.longitudinal_force_N, R = p_.UNLOADED_RADIUS,
+               Fm = F < p_.FZMIN ? F * std::pow(F / p_.FZMIN, 2) : F;
+  out.overturning_moment_Nm =
+    R * Fm * p_.LMX *
+      (p_.QSX1 * p_.LVMX - p_.QSX2 * g * (1. + p_.PPMX1 * dp) + p_.QSX3 * fy / p_.FNOMIN +
+       p_.QSX4 * std::cos(p_.QSX5 * std::atan(std::pow(p_.QSX6 * Fm / p_.FNOMIN, 2))) *
+         std::sin(p_.QSX7 * g + p_.QSX8 * std::atan(p_.QSX9 * fy / p_.FNOMIN)) +
+       p_.QSX10 * std::atan(p_.QSX11 * Fm / p_.FNOMIN) * g) +
+    R * p_.LMX * (fy * (p_.QSX13 + p_.QSX14 * std::abs(g)) - Fm * p_.QSX12 * g * std::abs(g));
+  const double ar = a + y.sh + y.sv / safe(y.K),
+               at = a + p_.QHZ1 + p_.QHZ2 * d + (p_.QHZ3 + p_.QHZ4 * d) * gs;
+  const double Bt = (p_.QBZ1 + p_.QBZ2 * d + p_.QBZ3 * d * d) *
+                    (1. + p_.QBZ4 * g + p_.QBZ5 * std::abs(g)) * p_.LKY / safe(p_.LMUY),
+               Ct = p_.QCZ1;
+  const double Dt = (p_.QDZ1 + p_.QDZ2 * d) * (1. - p_.PPZ1 * dp) *
+                    (1. + p_.QDZ3 * g + p_.QDZ4 * g * g) * F * (R / F0) * p_.LTR;
+  const double Et = std::min(
+    1., (p_.QEZ1 + p_.QEZ2 * d + p_.QEZ3 * d * d) *
+          (1. + (p_.QEZ4 + p_.QEZ5 * gs) * 2. / M_PI * std::atan(Bt * Ct * at)));
+  const double Br = p_.QBZ9 * p_.LKY / safe(p_.LMUY) + p_.QBZ10 * y.B * y.C;
+  const double Dr =
+    F * R *
+    ((p_.QDZ6 + p_.QDZ7 * d) * p_.LRES +
+     ((p_.QDZ8 + p_.QDZ9 * d) * (1. + p_.PPZ2 * dp) + (p_.QDZ10 + p_.QDZ11 * d) * std::abs(gs)) *
+       gs * p_.LKZC) *
+    p_.LMUY * std::cos(a);
+  const double ratio = std::pow(Kx / safe(y.K) * k, 2);
+  const double areq = std::copysign(std::atan(std::sqrt(std::pow(std::tan(ar), 2) + ratio)), ar),
+               ateq = std::copysign(std::atan(std::sqrt(std::pow(std::tan(at), 2) + ratio)), at);
+  const double trail =
+    Dt * std::cos(Ct * std::atan(Bt * ateq - Et * (Bt * ateq - std::atan(Bt * ateq)))) *
+    std::cos(u.slip_angle_rad) * p_.LFZO;
+  const double arm = R * (p_.SSZ1 + p_.SSZ2 * fy / p_.FNOMIN + (p_.SSZ3 + p_.SSZ4 * d) * g) * p_.LS;
+  out.self_aligning_moment_Nm =
+    -trail * Gy * y0.force + Dr * std::cos(std::atan(Br * areq)) + arm * fx;
+  return out;
 }
 }  // namespace tam::ocd::tire_models

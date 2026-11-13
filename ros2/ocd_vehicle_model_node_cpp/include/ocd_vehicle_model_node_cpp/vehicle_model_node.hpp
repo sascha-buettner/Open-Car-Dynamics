@@ -53,9 +53,20 @@ public:
   /// @brief  Reset the model to initial state
   void reset();
 
+protected:
+  // Model-specific initialization is performed before the executor starts its
+  // periodic callbacks (for example loading immutable road collision data).
+  VEHICLE_T & physical_model() { return *veh_model_; }
+  // Called before publishing the matching planar sample. Derived nodes can expose
+  // model-specific readouts without accessing the logger or retaining model ownership.
+  virtual void publish_additional_outputs(const types::VehicleModelOutput &, const rclcpp::Time &)
+  {
+  }
+
 private:
   bool initial_cycle_{true};
   bool high_frequency_logging_{false};
+  bool compact_state_input_logging_{false};
   std::unique_ptr<VEHICLE_T> veh_model_{};
 
   // Time skew monitoring and compensation

@@ -50,14 +50,18 @@ ament_target_dependencies(${PROJECT_NAME} ${MODEL_DEPENDENCIES})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET) # so client can also call target_link_libraries(template_lib_cpp::template_lib_cpp)
 ament_export_dependencies(${MODEL_DEPENDENCIES}) # other dependencies so client does not need to call find_package on them
 
-# if(BUILD_TESTING)
-#   find_package(ament_lint_auto REQUIRED)
-#   ament_lint_auto_find_test_dependencies()
-
-#   ament_add_gtest(unit_tests  # unit tests
-#     test/unit_test.cpp 
-#   )
-#   target_link_libraries(unit_tests ${PROJECT_NAME}) # make our library available to the test executable
-# endif()
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(steering_ackermann_test test/ackermann.cpp)
+  target_link_libraries(steering_ackermann_test ${PROJECT_NAME})
+  add_test(NAME steering_ackermann COMMAND steering_ackermann_test)
+  add_executable(steering_rate_limits_test test/rate_limits.cpp)
+  target_link_libraries(steering_rate_limits_test ${PROJECT_NAME})
+  target_compile_options(steering_rate_limits_test PRIVATE -UNDEBUG)
+  add_test(NAME steering_rate_limits COMMAND steering_rate_limits_test)
+  add_executable(steering_damped_pt2_test test/damped_pt2.cpp)
+  target_link_libraries(steering_damped_pt2_test ${PROJECT_NAME})
+  add_test(NAME steering_damped_pt2 COMMAND steering_damped_pt2_test)
+endif()
 
 ament_package()

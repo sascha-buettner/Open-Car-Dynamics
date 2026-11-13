@@ -8,11 +8,13 @@
 #include <map>
 #include <memory>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "ocd_drivetrain_model_base_cpp/concept.hpp"
 #include "ocd_steering_actuator_model_base_cpp/concept.hpp"
+#include "ocd_types_cpp/road_surface.hpp"
 #include "ocd_vehicle_dynamics_model_base_cpp/concept.hpp"
 #include "ocd_vehicle_model_base_cpp/base_class.hpp"
 #include "ocd_vehicle_model_cpp/conditional_auxiliary_input.hpp"
@@ -32,6 +34,19 @@ class VehicleModel : public auxiliary::conditional_compilation::SaHelperVehicleM
 
 {
 private:
+  double integration_time_s_{0.};
+  bool state_input_recording_{false};
+  bool replay_boundary_{false};
+  double replay_brake_scale_{1.};
+  double excitation_trigger_mode_{0.}, recorded_brake_scale_{1.};
+  types::ExternalInfluences recorded_external_influences_{};
+  tam::tsl::ValueLogger::SharedPtr state_input_logger_ = std::make_shared<tam::tsl::ValueLogger>();
+  void record_state_and_inputs();
+  double excitation_mode_{0.}, excitation_hz_{7.}, excitation_amplitude_{0.}, excitation_phase_{0.},
+    excitation_burst_{0.}, excitation_lever_{1.0};
+  double excitation_onset_{-1.}, excitation_release_{-1.};
+  bool excitation_braking_{false};
+
   // region internal models
   VD_MODEL_T vehicle_dynamics_model_;
   // DT_MODEL_T drivetrain_model_;
@@ -99,6 +114,47 @@ private:
 
 public:
   VehicleModel();
+  tam::tsl::LoggerAccessInterface::SharedPtr get_state_input_logger() const
+  {
+    return state_input_logger_;
+  }
+  void set_road_surface(std::shared_ptr<const types::RoadSurface> surface)
+  {
+    vehicle_dynamics_model_.set_road_surface(std::move(surface));
+  }
+  auto get_tire_contact_diagnostics() const
+    requires requires(const VD_MODEL_T & dynamics) { dynamics.get_tire_contact_diagnostics(); }
+  {
+    return vehicle_dynamics_model_.get_tire_contact_diagnostics();
+  }
+  // Diagnostic trajectory replay projects selected continuous states at a
+  // simulation boundary. It preserves all other states and actuator history.
+  // Production simulations do not call this; it is not a force calibration.
+  void project_replay_state(const std::map<std::string, double> & values)
+  {
+    auto candidate = x;
+    for (const auto & [name, value] : values) {
+      if (!std::isfinite(value)) throw std::invalid_argument("Nonfinite replay state: " + name);
+      bool found = false;
+      auto apply = [&](const auto & names, const std::string & prefix, std::size_t offset) {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+          if (name != prefix + std::string(names[i])) continue;
+          candidate[offset + i] = value;
+          found = true;
+          break;
+        }
+      };
+      apply(VD_MODEL_T::StateNamesTrait::value, "vehicle_dynamics.", OFFSET_VD);
+      apply(DT_MODEL_T::StateNamesTrait::value, "drivetrain.", OFFSET_DT);
+      apply(SA_MODEL_T::StateNamesTrait::value, "steering_actuator.", OFFSET_SA);
+      if (!found) throw std::invalid_argument("Unknown replay state: " + name);
+    }
+    x = candidate;
+    set_state_vector_of_models(x);
+  }
+  // Offline reconstruction only. The complete accepted state and effective
+  // inputs are supplied; no integration or prescribed excitation is reapplied.
+  void replay_recorded_boundary(const std::map<std::string, double> & record);
 
   // model step function
   void step() override;

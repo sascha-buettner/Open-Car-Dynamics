@@ -18,6 +18,8 @@
   <depend>ocd_aerodynamics_model_base_cpp</depend>
   <depend>ocd_vehicle_dynamics_model_base_cpp</depend>
 
+  <test_depend>ocd_tire_models_cpp</test_depend>
+  <test_depend>ocd_aerodynamics_models_cpp</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>

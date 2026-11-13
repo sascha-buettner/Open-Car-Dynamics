@@ -42,6 +42,35 @@ types::AeroModelOutput DefaultAerodynamicsModel::evaluate(types::AeroModelInput 
   out.force_cog_N.z =
     0.5 * (p_.c_l + delta_c_l) * p_.air_density_kgpm3 * p_.A_m2 * std::pow(vx_rel_mps, 2);
 
+  if (p_.attitude_enabled > .5) {
+    if (!(std::isfinite(p_.attitude_wheelbase_m) && p_.attitude_wheelbase_m > 0. &&
+          p_.attitude_front_distance_m > 0. &&
+          p_.attitude_front_distance_m < p_.attitude_wheelbase_m &&
+          p_.attitude_minimum_speed_mps > 0.))
+      throw std::invalid_argument("Invalid attitude aero geometry");
+    auto bound = [](double x, double lo, double hi) {
+      if (!(lo < 0. && hi > 0.)) throw std::invalid_argument("Invalid attitude aero bounds");
+      return x >= 0. ? hi * std::tanh(x / hi) : -lo * std::tanh(x / (-lo));
+    };
+    // Our theta is nose-down positive. Marchesin et al. Eq21 uses the
+    // opposite pitch sign: theta_eff=theta+L*q/U-vz/U in our coordinates.
+    const double U = std::max(std::abs(vx_rel_mps), p_.attitude_minimum_speed_mps);
+    const double theta =
+      u.pitch_angle_rad + p_.attitude_unsteady_gain *
+                            (p_.attitude_wheelbase_m * u.pitch_rate_radps - u.heave_velocity_mps) /
+                            U;
+    const double dz = u.z_m - p_.attitude_reference_z_m;
+    const double hf = dz - p_.attitude_front_distance_m * theta;
+    const double hr = dz + (p_.attitude_wheelbase_m - p_.attitude_front_distance_m) * theta;
+    const double lift = bound(
+      p_.attitude_lift_front_gradient_per_m * hf + p_.attitude_lift_rear_gradient_per_m * hr,
+      p_.attitude_lift_delta_min, p_.attitude_lift_delta_max);
+    const double balance = bound(
+      p_.attitude_balance_front_gradient_per_m * hf + p_.attitude_balance_rear_gradient_per_m * hr,
+      p_.attitude_balance_delta_min, p_.attitude_balance_delta_max);
+    out.force_cog_N.z *= 1. + p_.attitude_lift_gain * lift;
+    aero_center_translation_m += p_.attitude_center_gain * p_.attitude_wheelbase_m * balance;
+  }
   // Aero Balance
   out.torque_Nm.y = -out.force_cog_N.z * (p_.d_aero_center_cog_m + aero_center_translation_m);
 
@@ -68,6 +97,68 @@ void DefaultAerodynamicsModel::declare_parameters(
   param_manager->declare_parameter(
     name_prefix + "d_aero_center_cog_m", &(p_.d_aero_center_cog_m), 0.0,
     tam::pmg::ParameterType::DOUBLE, "");
+
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.enabled", &p_.attitude_enabled, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.lift_gain", &p_.attitude_lift_gain, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.center_gain", &p_.attitude_center_gain, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.unsteady_gain", &p_.attitude_unsteady_gain, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.reference_z_m", &p_.attitude_reference_z_m, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.wheelbase_m", &p_.attitude_wheelbase_m, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.front_distance_m", &p_.attitude_front_distance_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.lift_front_gradient_per_m", &p_.attitude_lift_front_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.lift_rear_gradient_per_m", &p_.attitude_lift_rear_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.balance_front_gradient_per_m",
+    &p_.attitude_balance_front_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.balance_rear_gradient_per_m",
+    &p_.attitude_balance_rear_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.lift_delta_min", &p_.attitude_lift_delta_min, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.lift_delta_max", &p_.attitude_lift_delta_max, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.balance_delta_min", &p_.attitude_balance_delta_min, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.balance_delta_max", &p_.attitude_balance_delta_max, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
+  param_manager->declare_parameter(
+    name_prefix + "attitude_map.minimum_speed_mps", &p_.attitude_minimum_speed_mps, 1.0,
+    tam::pmg::ParameterType::DOUBLE,
+    "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
 
   // Velocity scaling of cl
   param_manager->declare_parameter(

@@ -37,8 +37,35 @@ namespace tam::ocd::vehicle_dynamics::double_track::States
   X(alpha_tire_FR) \
   X(alpha_tire_RL) \
   X(alpha_tire_RR) \
+  X(lateral_deflection_tire_FL_m) \
+  X(lateral_deflection_tire_FR_m) \
+  X(lateral_deflection_tire_RL_m) \
+  X(lateral_deflection_tire_RR_m) \
+  X(z_belt_FL_m) \
+  X(z_belt_FR_m) \
+  X(z_belt_RL_m) \
+  X(z_belt_RR_m) \
+  X(v_z_belt_FL_mps) \
+  X(v_z_belt_FR_mps) \
+  X(v_z_belt_RL_mps) \
+  X(v_z_belt_RR_mps) \
+  X(resonant_q_FL) \
+  X(resonant_q_FR) \
+  X(resonant_q_RL) \
+  X(resonant_q_RR) \
+  X(resonant_v_FL) \
+  X(resonant_v_FR) \
+  X(resonant_v_RL) \
+  X(resonant_v_RR) \
+  X(belt_maxwell_FL) \
+  X(belt_maxwell_FR) \
+  X(belt_maxwell_RL) \
+  X(belt_maxwell_RR) \
+  X(contact_capacity_FL_N) \
+  X(contact_capacity_FR_N) \
+  X(contact_capacity_RL_N) \
+  X(contact_capacity_RR_N) \
 // clang-format on
-
 /*
   x_m              ->  x position of the vehicle in m
   y_m              ->  y position of the vehicle in m
@@ -67,9 +94,8 @@ namespace tam::ocd::vehicle_dynamics::double_track::States
   alpha_tire_FL    ->  Tire forces
   alpha_tire_FR    ->  Tire forces
   alpha_tire_RL    ->  Tire forces
-  alpha_tire_RR    ->  Tire forces 
+  alpha_tire_RR    ->  Tire forces
 */
-
 
 // Generate enum and names array
 enum StateEnum {

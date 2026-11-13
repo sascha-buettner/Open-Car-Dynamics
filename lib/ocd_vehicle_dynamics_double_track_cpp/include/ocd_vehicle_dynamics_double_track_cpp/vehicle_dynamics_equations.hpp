@@ -13,8 +13,18 @@
 
 #include "ocd_aerodynamics_model_base_cpp/concept.hpp"
 #include "ocd_tire_model_base_cpp/concept.hpp"
+#include "ocd_types_cpp/road_surface.hpp"
 #include "ocd_types_cpp/types.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/five_point_contact.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/mf62_vertical.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/nonlinear_radial_contact.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/road_contact_frame.hpp"
 #include "ocd_vehicle_dynamics_double_track_cpp/states.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/suspension_lookup.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/suspension_table_2d.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/tire_load_memory.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/generic_radial_compliance.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/generic_radial_lookup.hpp"
 #include "ocd_vehicle_dynamics_model_base_cpp/base_class.hpp"
 #include "tum_helpers_cpp/constants.hpp"
 #include "tum_helpers_cpp/numerical.hpp"
@@ -66,17 +76,93 @@ class VehicleDynamicsDoubleTrackEqns
     // Height of the pitch center during acceleration
     double h_pc_decel;  // [m]
     // Height of the roll center
+    tam::types::common::DataPerWheel<double> inflation_absolute_Pa{
+      1.0, 1.0, 1.0, 1.0};
+    double atmosphere_Pa{1.0};
     double h_rc;  // [m]
+    double mf62_vertical_enabled{1.0}, mf62_rolling_enabled{1.0}, effective_radius_only{1.0};
+    double longitudinal_relaxation_length_m{1.0};
+    MF62Vertical vertical_front{}, vertical_rear{};
+    double_per_wheel_t inflation_reference_absolute_Pa{1.0, 1.0, 1.0, 1.0};
+    double kinematics_enabled{1.0}, corner_weights_enabled{1.0}, material_velocity_enabled{1.0};
+    double_per_wheel_t corner_weights_kg{1.0, 1.0, 1.0, 1.0};
+    std::vector<double> kinematic_travel{1.0, 1.0}, kinematic_mean_angle{1.0, 1.0},
+      kinematic_rack{1.0, 1.0};
+    SuspensionMap2D kinematic_front{}, kinematic_rear{};
+    std::vector<double> rear_third_bar_travel{1.0, 1.0},
+      rear_third_device_compression{1.0 / 1.0, 1.0 / 1.0};
+    double geometry_enabled{1.0};
+    double endstop_enabled{1.0}, endstop_stiffness{1.0}, endstop_damping{1.0};
+    double stroke_bump_front{1.0}, stroke_rebound_front{1.0};
+    double stroke_bump_rear{1.0}, stroke_rebound_rear{1.0};
+    double caster_rad{1.0}, kingpin_inclination_rad{1.0};
+    double h_rc_front{1.0}, h_rc_rear{1.0};
+    double static_roll_centers_enabled{1.0};
+    std::vector<double> geometry_travel{1.0, 1.0};
+    std::vector<double> geometry_equiv_front{1.0, 1.0}, geometry_equiv_rear{1.0, 1.0};
+    std::vector<double> geometry_camber_front{1.0, 1.0}, geometry_camber_rear{1.0, 1.0};
+    std::vector<double> geometry_toe_front{1.0, 1.0}, geometry_toe_rear{1.0, 1.0};
+    std::vector<double> geometry_roll_front{1.0, 1.0}, geometry_roll_rear{1.0, 1.0};
+    std::vector<double> geometry_steer{1.0, 1.0, 1.0}, geometry_jacking{1.0, 1.0, 1.0};
     // Spring & Damping constants
-    double c_f;    // [N/m]
-    double c_r;    // [N/m]
-    double d_f;    // [N*s/m]
-    double d_r;    // [N*s/m]
+    double c_f;  // [N/m]
+    double c_r;  // [N/m]
+    double d_f;  // [N*s/m]
+    double d_r;  // [N*s/m]
+    double damper_curve_enabled_f{1.0}, damper_curve_enabled_r{1.0};
+    double damper_motion_ratio_f{1.0}, damper_motion_ratio_r{1.0};
+    std::vector<double> damper_speed_mps{1.0, 1.0};
+    std::vector<double> damper_bump_f{1.0, 1.0}, damper_rebound_f{1.0, 1.0};
+    std::vector<double> damper_bump_r{1.0, 1.0}, damper_rebound_r{1.0, 1.0};
+    // Optional radial-only Generic lookup. Tangential equations/states unchanged.
+    double radial_lookup_enabled{1.0}, radial_conditioning_enabled{1.0}, radial_frozen_preload{1.0};
+    double radial_stiffness_scale{1.0}, radial_nominal_stiffness{1.0};
+    double low_load_boundary_N{1.0}, load_memory_fraction{1.0}, load_memory_tau_s{1.0};
+    double fy_radial_mode{1.0}, fy_relaxation_strength{1.0};
+    double radial_robust_solver_enabled{1.0};
+    double force_conditioning_enabled{1.0};
+    double_per_wheel_t force_condition_kappa{}, force_condition_alpha{}, radial_condition_fy_N{};
+    double radial_speed_mps{1.0}, radial_softening_fraction{1.0};
+    double radial_force_reference_f{1.0}, radial_force_reference_r{1.0};
+    double_per_wheel_t radial_condition_load_N{1.0, 1.0, 1.0, 1.0};
+    double_per_wheel_t radial_condition_fx_N{1.0, 1.0, 1.0, 1.0};
     double c_t_f;  // [N/m]
     double c_t_r;  // [N/m]
     // Anti-Roll bar
     double c_ar_f;  // [N/m]
     double c_ar_r;  // [N/m]
+    // Local road contact: measured vertical/lateral compliance is configured per axle.
+    double contact_enabled{1.0};
+    double contact_sampling_points{1.0}, sidewall_enabled{1.0};
+    double mf62_contact_force_coupling{1.0};
+    double strict_surface_coverage{1.0};
+    double tire_damping_f{1.0}, tire_damping_r{1.0};
+    double resonant_belt_enabled{1.0}, resonant_belt_hz{1.0};
+    double resonant_enabled{1.0}, resonant_hz{1.0}, resonant_width_hz{1.0}, resonant_residual{1.0};
+    double maxwell_enabled{1.0}, maxwell_hz{1.0}, maxwell_fraction{1.0},
+      maxwell_viscous_fraction{1.0};
+    double_per_wheel_t resonant_acceleration{}, maxwell_derivative{};
+
+    double tire_width_f{1.0}, tire_width_r{1.0};
+    double contact_half_length{1.0};
+    double contact_micro_radius{1.0};
+    double enveloping_radius_f{1.0}, enveloping_radius_r{1.0};
+    double radial_speed_override_enabled{1.0};
+    double belt_enabled{1.0}, belt_mass_f{1.0}, belt_mass_r{1.0};
+    double belt_frequency_f{1.0}, belt_frequency_r{1.0};
+    double belt_damping_ratio_f{1.0}, belt_damping_ratio_r{1.0};
+    double lateral_stiffness_f{1.0}, lateral_stiffness_r{1.0};
+    double sidewall_height_f{1.0}, sidewall_height_r{1.0};
+    double lateral_drop_scale{1.0};
+    double lateral_drop_deflection_limit{1.0};
+    double bump_gap_f{1.0}, bump_gap_r{1.0};
+    double bump_stiffness_f{1.0}, bump_stiffness_r{1.0};
+    // Optional third-element rubber. Device gap and wheel/device motion ratio.
+    // Zero stiffness preserves the existing suspension; rubber curves require identification.
+    double heave_stiffness_f{1.0}, heave_stiffness_r{1.0};
+    double heave_spring_f{1.0}, heave_spring_r{1.0};
+    double heave_gap_f{1.0}, heave_gap_r{1.0};
+    double heave_motion_ratio_f{1.0}, heave_motion_ratio_r{1.0};
     // Rolling resistance
     double c_rr;  // https://en.wikipedia.org/wiki/Rolling_resistance
     // Tire Radii velocity scaling
@@ -87,6 +173,14 @@ class VehicleDynamicsDoubleTrackEqns
     tam::types::common::DataPerWheel<double> camber_out_rad;
   };
   // Variables that are directly calculated from the given parameters
+  double_per_wheel_t radial_k_Npm_{1.0, 1.0, 1.0, 1.0};
+  double_per_wheel_t radial_preload_N_{};
+  double_per_wheel_t radial_force_coefficient_Npm_{};
+  double_per_wheel_t radial_nominal_compression_m_{};
+  std::array<GenericRadialCompliance, 4> radial_compliance_{};
+  std::vector<double> radial_compliance_reference_signature_{};
+  double radial_iteration_residual_{0.};
+  double radial_root_fallback_used_{0.}, radial_root_evaluations_{0.};
   struct DependentParameters
   {
     double l_r = 0.0;
@@ -158,10 +252,61 @@ class VehicleDynamicsDoubleTrackEqns
     // Resulting forces
     vector3d_t resulting_force_N{0, 0, 0};    // On the vehicle
     vector3d_t resulting_torque_Nm{0, 0, 0};  // On the vehicle body
+    double_per_wheel_t road_contact_height_m{0, 0, 0, 0};
+    // Diagnostic snapshots of the same five-node solve used by the dynamics.
+    // Coordinates are in the moving planar road frame; z is a normal residual.
+    std::array<double_per_wheel_t, 5> contact_node_query_x_m{}, contact_node_query_y_m{};
+    std::array<double_per_wheel_t, 5> contact_node_road_z_m{}, contact_node_belt_z_m{};
+    std::array<double_per_wheel_t, 5> contact_node_normal_N{};
+    std::array<double_per_wheel_t, 5> contact_node_force_x_N{}, contact_node_force_y_N{};
+    double_per_wheel_t contact_force_x_N{0, 0, 0, 0};
+    double_per_wheel_t contact_force_y_N{0, 0, 0, 0};
+    double_per_wheel_t contact_missing_samples{0, 0, 0, 0};
+    double_per_wheel_t contact_bridged_samples{0, 0, 0, 0};
+    double_per_wheel_t tire_lateral_deflection_m{0, 0, 0, 0};
+    double_per_wheel_t tire_lateral_drop_m{0, 0, 0, 0};
+    double_per_wheel_t tire_lateral_target_m{0, 0, 0, 0};
+    double_per_wheel_t tire_deformation_extrapolated{0, 0, 0, 0};
+    double_per_wheel_t suspension_bump_force_N{0, 0, 0, 0};
+    double_per_wheel_t endstop_force_N{0, 0, 0, 0};
+    double_per_wheel_t damper_curve_speed_extrapolated{0, 0, 0, 0};
+    double_per_wheel_t suspension_heave_force_N{0, 0, 0, 0};
+    double_per_wheel_t suspension_heave_energy_J{0, 0, 0, 0};
+    double_per_wheel_t contact_yaw_moment_Nm{0, 0, 0, 0};
+    double_per_wheel_t contact_elastic_energy_J{0, 0, 0, 0};
+    double_per_wheel_t belt_carcass_force_N{0, 0, 0, 0};
+    double_per_wheel_t belt_resulting_force_N{0, 0, 0, 0};
+    double_per_wheel_t belt_elastic_energy_J{0, 0, 0, 0};
+    double_per_wheel_t rim_support_force_N{0, 0, 0, 0};
+    double_per_wheel_t contact_normal_load_N{0, 0, 0, 0};
+    double_per_wheel_t contact_tangential_vertical_force_N{0, 0, 0, 0};
     // Dynamic Tire Radius
     double_per_wheel_t dynamic_tire_radius_m{0, 0, 0, 0};
   };
   //
+  std::vector<double> radial_reference_signature_;
+  double_per_wheel_t radial_reference_loaded_m_{0, 0, 0, 0};
+  double_per_wheel_t mf62_free_radius_m_{0, 0, 0, 0}, mf62_loaded_radius_m_{0, 0, 0, 0},
+    mf62_deflection_m_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_arb_m_{0, 0, 0, 0}, kinematic_arb_jac_{1, 1, 1, 1};
+  double_per_wheel_t tire_mx_Nm_{0, 0, 0, 0}, tire_mz_Nm_{0, 0, 0, 0};
+  double_per_wheel_t tire_gamma_rad_{0, 0, 0, 0}, radial_residual_N_{0, 0, 0, 0};
+  double body_cg_y_m_{0.}, vehicle_cg_y_m_{0.}, kinematic_rack_m_{0.}, kinematic_rack_rate_mps_{0.};
+  double_per_wheel_t kinematic_q_m_{0, 0, 0, 0}, kinematic_q_velocity_mps_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_spring_m_{0, 0, 0, 0}, kinematic_spring_jac_{1, 1, 1, 1},
+    kinematic_spring_steer_jac_{0, 0, 0, 0}, kinematic_damper_steer_jac_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_jac_x_{0, 0, 0, 0}, kinematic_jac_y_{0, 0, 0, 0},
+    kinematic_jac_z_{1, 1, 1, 1};
+  double_per_wheel_t kinematic_contact_x_{0, 0, 0, 0}, kinematic_contact_y_{0, 0, 0, 0},
+    kinematic_contact_z_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_angjac_x_{0, 0, 0, 0}, kinematic_angjac_y_{0, 0, 0, 0},
+    kinematic_angjac_z_{0, 0, 0, 0};
+  double roll_center_front_y_m_{0.}, roll_center_rear_y_m_{0.};
+  double steering_mean_rate_radps_{0.};
+  double_per_wheel_t geometry_equivalent_extension_m_{0, 0, 0, 0}, geometry_leverage_{1, 1, 1, 1};
+  double_per_wheel_t kinematic_jacking_m_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_camber_rad_{0, 0, 0, 0};
+  double_per_wheel_t kinematic_toe_rad_{0, 0, 0, 0};
   double_per_wheel_t wheel_speeds_radps_{0, 0, 0, 0};
   double_per_wheel_t steering_angle_per_wheel_rad_{0, 0, 0, 0};
   //
@@ -173,8 +318,14 @@ class VehicleDynamicsDoubleTrackEqns
   types::VehicleDynamicsModelOutput vd_output_{};
   //
   IntermediateResults imr_{};
+  std::array<RoadContactFrame, 4> contact_frames_{};
   //
   types::ExternalInfluences external_influences_{};
+  std::shared_ptr<const types::RoadSurface> road_surface_;
+  double_per_wheel_t point_road_gx_{0, 0, 0, 0}, point_road_gy_{0, 0, 0, 0},
+    point_road_h_{0, 0, 0, 0};
+  FivePointContact contact_;
+  void calculate_local_road_contact();
   tam::types::common::DataPerWheel<TireModelT> tire_models_;
   AeroModelT aero_model_;
   Parameters p_;
@@ -184,7 +335,14 @@ class VehicleDynamicsDoubleTrackEqns
   static constexpr double G_CONST = 9.81;  // mps2
   double_per_wheel_t tire_spring_initial_compression_{0, 0, 0, 0};
   //
+  double radial_lookup_speed_mps() const
+  {
+    return p_.radial_conditioning_enabled > .5 || p_.radial_speed_override_enabled > .5
+             ? p_.radial_speed_mps
+             : std::hypot(x_vec_[x::v_x_mps], x_vec_[x::v_y_mps]);
+  }
   void calculate_intermediate_results();
+  void calculate_suspension_output();
   // Function to calculate pars of the intermediate results.
   void calc_dynamic_tire_radius();
   void calculate_effective_steering_angle();
@@ -220,6 +378,7 @@ public:
   {
     wheel_speeds_radps_ = wheel_speeds_radps;
   }
+  void set_steering_rate(double rate) { steering_mean_rate_radps_ = rate; }
   void set_steering_angles(const double_per_wheel_t & steering_angle_per_wheel_rad)
   {
     steering_angle_per_wheel_rad_ = steering_angle_per_wheel_rad;

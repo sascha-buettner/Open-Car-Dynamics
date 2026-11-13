@@ -1,8 +1,10 @@
+#include "tsl_ros2_publisher_cpp/compression.hpp"
 // Copyright 2026 Simon Sagmeister
 #pragma once
+#include <cmath>
+
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -10,6 +12,7 @@
 
 #include "ocd_vehicle_model_node_cpp/helpers.hpp"
 #include "ocd_vehicle_model_node_cpp/vehicle_model_node.hpp"
+#include "param_management_ros2_integration_cpp/utils.hpp"
 #include "tum_ros_helpers_cpp/qos.hpp"
 #include "tum_ros_helpers_cpp/timer.hpp"
 #include "tum_type_conversions_ros_cpp/tum_type_conversions.hpp"
@@ -39,6 +42,13 @@ VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::VehicleModelN
         sa_comm_handler_->get_param_manager()});
     callback_handle_ = tam::pmg::connect_param_manager_to_ros_cb(this, param_manager_composer_);
     tam::pmg::declare_ros_params_from_param_manager(this, param_manager_composer_.get());
+    // Keep model storage identical to the accepted ROS values even when a
+    // transport applies declaration overrides before invoking set callbacks.
+    tam::pmg::MgmtInterface * model_parameters = param_manager_composer_.get();
+    for (const auto & name : model_parameters->list_parameters()) {
+      tam::pmg::utils::set_from_ros_param(model_parameters, this->get_parameter(name));
+    }
+
   } catch (const std::out_of_range & e) {
     std::cerr << "Parameter manager error: " << e.what() << std::endl;
     throw;
@@ -49,7 +59,19 @@ VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::VehicleModelN
     std::vector<tam::tsl::LoggerAccessInterface::SharedPtr>(
       {logger_, veh_model_->get_logger(), dt_comm_handler_->get_logger(),
        sa_comm_handler_->get_logger()}));
-  tsl_pub_ = std::make_unique<tam::tsl::TSLPublisher>(this, logger_composer_);
+  if constexpr (requires { veh_model_->get_state_input_logger(); }) {
+    compact_state_input_logging_ = this->get_parameter("recording.state_input_only").as_bool();
+    if (compact_state_input_logging_) {
+      // Use the standard typed publisher. No executor or publisher-layout patch.
+      tsl_pub_ = std::make_unique<tam::tsl::TSLPublisher>(
+        this, veh_model_->get_state_input_logger(), "",
+        std::make_shared<tam::tsl::builtin_compression_strategies::Uncompressed>());
+    } else {
+      tsl_pub_ = std::make_unique<tam::tsl::TSLPublisher>(this, logger_composer_);
+    }
+  } else {
+    tsl_pub_ = std::make_unique<tam::tsl::TSLPublisher>(this, logger_composer_);
+  }
 
   // model update timer
   timer_period_s_ =
@@ -134,8 +156,10 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_up
     ++double_step_count_;
   }
   sim_time_since_start_ += num_steps * nominal_step;
-  // Filtered fraction of cycles that double-stepped, to detect a timer running too far off real-time.
-  filtered_double_step_ratio_ += 0.0005 * ((num_steps == 2 ? 1.0 : 0.0) - filtered_double_step_ratio_);
+  // Filtered fraction of cycles that double-stepped, to detect a timer running too far off
+  // real-time.
+  filtered_double_step_ratio_ +=
+    0.0005 * ((num_steps == 2 ? 1.0 : 0.0) - filtered_double_step_ratio_);
 
   // Get the chrono time to actually have an execution time measurement (not affected by sim time)
   auto t_start = std::chrono::high_resolution_clock::now().time_since_epoch();
@@ -146,6 +170,7 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_up
 
   for (int i = 0; i < num_steps; ++i) {
     veh_model_->step();
+    if (compact_state_input_logging_) tsl_pub_->trigger();
     dt_comm_handler_->update_delay_timer(nominal_step);
     sa_comm_handler_->update_delay_timer(nominal_step);
   }
@@ -195,6 +220,8 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::output_c
   nav_msgs::msg::Odometry odom =
     tam::ocd::helpers::type_conversion::toMsg(vehicle_model_output.vehicle_dynamics_output);
   rclcpp::Time stamp = get_clock()->now();
+
+  publish_additional_outputs(vehicle_model_output, stamp);
 
   odom.header.stamp = stamp;
   odom.header.frame_id = CoordinateFrames::local_cartesian;
@@ -266,7 +293,7 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::output_c
   }
 
   // Publish the debug outputs
-  tsl_pub_->trigger();
+  if (!compact_state_input_logging_) tsl_pub_->trigger();
 }
 template <
   interfaces::concepts::VehicleModel VEHICLE_T,

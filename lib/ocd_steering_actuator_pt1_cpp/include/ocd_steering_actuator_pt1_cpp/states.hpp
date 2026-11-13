@@ -19,7 +19,7 @@ struct Feedback
 };
 namespace States
 {
-#define STATE_LIST(X) X(position_rad)
+#define STATE_LIST(X) X(position_rad) X(velocity_radps)
 enum StateEnum {
 #define X(name) name,
   STATE_LIST(X)
