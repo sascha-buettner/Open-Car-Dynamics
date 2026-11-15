@@ -3,6 +3,10 @@
 #pragma once
 #include <math.h>
 
+#ifdef EAV24_STEP_TIMING
+#include <chrono>
+#include <cstdint>
+#endif
 #include <eigen3/Eigen/Dense>
 #include <functional>
 #include <map>
@@ -36,6 +40,20 @@ class VehicleModel : public auxiliary::conditional_compilation::SaHelperVehicleM
 private:
   double integration_time_s_{0.};
   bool state_input_recording_{false};
+#ifdef EAV24_STEP_TIMING
+  struct StepTiming
+  {
+    double outer_us{0.}, integrator_us{0.}, refresh_us{0.}, ode_us{0.};
+    double steering_us{0.}, dynamics_us{0.}, drivetrain_us{0.};
+    std::uint64_t ode_calls{0};
+  } step_timing_{};
+  bool step_timing_active_{false};
+  using TimingClock = std::chrono::steady_clock;
+  static double elapsed_us(TimingClock::time_point start)
+  {
+    return std::chrono::duration<double, std::micro>(TimingClock::now() - start).count();
+  }
+#endif
   bool replay_boundary_{false};
   double replay_brake_scale_{1.};
   double excitation_trigger_mode_{0.}, recorded_brake_scale_{1.};

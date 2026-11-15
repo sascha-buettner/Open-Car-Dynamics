@@ -9,10 +9,18 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
 {
   calculate_dependent_parameters();
   calculate_effective_steering_angle();
+  if(p_.ring_enabled>.5)for(int i=0;i<4;++i){
+    imr_.effective_steering_angle_per_wheel_rad[i]+=x_vec_[x::ring_yaw_FL_rad+i];
+    kinematic_camber_rad_[i]=(p_.kinematics_enabled>.5?kinematic_camber_rad_[i]:0.)+(i%2?1.:-1.)*x_vec_[x::ring_camber_FL_rad+i];
+  }
   calc_dynamic_tire_radius();
   // Iterate only the radial constitutive law with the current ODE-stage forces.
   // No previous-stage forces, prescribed tangential forces, or new states are used.
   if (p_.radial_lookup_enabled > .5) {
+    if (!radial_lookup_.configured())
+      radial_lookup_.configure(
+        p_.radial_grid_speeds, p_.radial_grid_pressures, p_.radial_grid_loads,
+        p_.radial_grid_front, p_.radial_grid_rear);
     if (!(std::isfinite(p_.radial_stiffness_scale) && p_.radial_stiffness_scale > 0.))
       throw std::invalid_argument("Invalid radial stiffness scale");
     if (p_.mf62_vertical_enabled > .5)
@@ -25,7 +33,7 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
       radial_k_Npm_[i] = GenericRadialLookup::soften(
         (p_.radial_nominal_stiffness > .5
            ? (i < 2 ? p_.c_t_f : p_.c_t_r)
-           : GenericRadialLookup::stiffness(
+           : radial_lookup_.stiffness(
                i >= 2, v, p_.inflation_absolute_Pa[i] - p_.atmosphere_Pa, f)) *
           p_.radial_stiffness_scale,
         p_.radial_softening_fraction, fx,
@@ -46,7 +54,8 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
       }
       radial_force_coefficient_Npm_[i] = radial_k_Npm_[i];
       if (p_.radial_conditioning_enabled < .5) {
-        radial_compliance_[i].reset(i >= 2, v, p_.inflation_absolute_Pa[i] - p_.atmosphere_Pa);
+        radial_compliance_[i].reset(
+          radial_lookup_, i >= 2, v, p_.inflation_absolute_Pa[i] - p_.atmosphere_Pa);
         const double factor = GenericRadialLookup::soften(
           1., p_.radial_softening_fraction, fx,
           i < 2 ? p_.radial_force_reference_f : p_.radial_force_reference_r);
@@ -66,7 +75,16 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
   auto evaluate_radial_contact = [&]() {
     calculate_tire_spring_initial_compression_m();
     calculate_tire_spring_force_N();
+#ifdef EAV24_STEP_TIMING
+    const auto contact_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
     calculate_local_road_contact();
+#ifdef EAV24_STEP_TIMING
+    if (step_timing_enabled_) {
+      step_timing_.contact_us += elapsed_us(contact_start);
+      ++step_timing_.contact_calls;
+    }
+#endif
     calculate_vertical_tire_force_N();
     if (
       (p_.mf62_vertical_enabled > .5 && p_.mf62_rolling_enabled > .5) ||
@@ -98,7 +116,7 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
         const double k =
           (p_.radial_nominal_stiffness > .5
              ? (i < 2 ? p_.c_t_f : p_.c_t_r)
-             : GenericRadialLookup::stiffness(
+             : radial_lookup_.stiffness(
                  i >= 2, speed, p_.inflation_absolute_Pa[i] - p_.atmosphere_Pa, force)) *
           p_.radial_stiffness_scale;
         double factor = GenericRadialLookup::soften(
@@ -161,7 +179,7 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
       const double base =
         (p_.radial_nominal_stiffness > .5
            ? (i < 2 ? p_.c_t_f : p_.c_t_r)
-           : GenericRadialLookup::stiffness(
+           : radial_lookup_.stiffness(
                i >= 2, speed, p_.inflation_absolute_Pa[i] - p_.atmosphere_Pa, force)) *
         p_.radial_stiffness_scale;
       const double rho = p_.radial_nominal_stiffness > .5 ? force / std::max(1000., base)
@@ -200,6 +218,9 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
                      frequency = i < 2 ? p_.belt_frequency_f : p_.belt_frequency_r;
         maximum = std::min(maximum, mass * std::pow(2. * M_PI * frequency, 2) * .999);
       }
+      const auto coupled_seed_coefficients=radial_force_coefficient_Npm_;
+      const auto coupled_seed_tangents=radial_k_Npm_;
+      auto coupled_seed_radii=imr_.dynamic_tire_radius_m;
       auto residual = [&](double coefficient) {
         radial_force_coefficient_Npm_[i] = coefficient;
         // The lookup's secant force coefficient and tangent are distinct.
@@ -218,32 +239,121 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
           if (std::abs(radial_k_Npm_[i] / t[3] - 1.) < 1e-12) return coefficient - t[0];
           radial_k_Npm_[i] = .5 * (radial_k_Npm_[i] + t[3]);
         }
-        throw std::runtime_error("Radial TOMS748: tangent feedback did not converge");
+        // A relaxed fixed point need not be contractive. Solve its original
+        // tangent equation on the positive series-compliance domain instead.
+        const double radius_seed=imr_.dynamic_tire_radius_m[i];
+        auto tangent_residual=[&](double tangent){
+          radial_k_Npm_[i]=tangent;
+          imr_.dynamic_tire_radius_m[i]=radius_seed;
+          // Ring camber shifts contact queries by radius*gamma. Close this
+          // weak effective-radius feedback too, so each scalar trial has a
+          // repeatable constitutive value rather than a previous-trial radius.
+          for(int geometry_iteration=0;geometry_iteration<24;++geometry_iteration){
+            const double before=imr_.dynamic_tire_radius_m[i];
+            ++radial_root_evaluations_;evaluate_radial_contact();
+            if(std::abs(imr_.dynamic_tire_radius_m[i]-before)<1e-12*std::max(.1,std::abs(before)))
+              return tangent-target(i)[3];
+          }
+          // A rolling-radius/contact fixed point can also lose contraction.
+          // Solve its unchanged geometric equation on the positive radius
+          // domain, bounded above by the unloaded MF radius at this spin.
+          const auto &vertical=i<2?p_.vertical_front:p_.vertical_rear;
+          const double free_radius=mf62_free_radius(vertical,wheel_speeds_radps_[i]);
+          auto radius_residual=[&](double radius){
+            imr_.dynamic_tire_radius_m[i]=radius;
+            ++radial_root_evaluations_;evaluate_radial_contact();
+            return radius-imr_.dynamic_tire_radius_m[i];
+          };
+          try{
+            const double radius=positive_residual_root(
+              radius_residual,radius_seed,1e-6,free_radius*(1.+1e-12));
+            const double error=radius_residual(radius);
+            if(std::abs(error)>1e-12*std::max(.1,std::abs(radius)))
+              throw std::runtime_error("Rolling-radius root fails geometric residual");
+            return tangent-target(i)[3];
+          }catch(const std::exception &failure){
+            throw std::runtime_error(std::string("Radial TOMS748: radius feedback root failed: ")+failure.what());
+          }
+        };
+        try{
+          const double tangent=positive_residual_root(tangent_residual,initial_tangents[i],minimum,maximum);
+          tangent_residual(tangent);
+          return coefficient-target(i)[0];
+        }catch(const std::exception &failure){
+          throw std::runtime_error(std::string("Radial TOMS748: tangent feedback root failed: ")+failure.what());
+        }
       };
-      const double seed = std::clamp(failed_coefficients[i], minimum, maximum);
-      double lo = std::max(minimum, seed * .8), hi = std::min(maximum, seed * 1.2);
-      double fl = residual(lo), fh = residual(hi);
-      for (int expansion = 0; fl * fh > 0. && expansion < 20; ++expansion) {
-        const double a = std::max(minimum, lo * .5), b = std::min(maximum, hi * 2.);
-        if (a == lo && b == hi) break;
-        lo = a;
-        hi = b;
-        fl = residual(lo);
-        fh = residual(hi);
+      try{
+        const double seed = std::clamp(failed_coefficients[i], minimum, maximum);
+        double lo = std::max(minimum, seed * .8), hi = std::min(maximum, seed * 1.2);
+        double fl = residual(lo), fh = residual(hi);
+        for (int expansion = 0; fl * fh > 0. && expansion < 20; ++expansion) {
+          const double a = std::max(minimum, lo * .5), b = std::min(maximum, hi * 2.);
+          if (a == lo && b == hi) break;
+          lo = a;
+          hi = b;
+          fl = residual(lo);
+          fh = residual(hi);
+        }
+        if (!(lo < hi && std::isfinite(fl) && std::isfinite(fh) && fl * fh <= 0.))
+          throw std::domain_error("Radial TOMS748: no sign-changing positive coefficient bracket");
+        boost::uintmax_t iterations = 80;
+        auto bracket = boost::math::tools::toms748_solve(
+          residual, lo, hi, fl, fh, boost::math::tools::eps_tolerance<double>(44), iterations);
+        const double root = .5 * (bracket.first + bracket.second);
+        const double rr = residual(root);
+        auto t = target(i);
+        if (!(std::abs(rr) / std::max(1., root) < 1e-9 && t[1] > .05 && t[2] > .05 && t[2] < 5.))
+          throw std::domain_error(
+            "Radial TOMS748: root fails residual or unchanged positive-force guards");
+        radial_force_coefficient_Npm_[i] = root;
+        radial_k_Npm_[i] = t[3];
+      }catch(const std::exception &scalar_failure){
+        const std::string reason=scalar_failure.what();
+        if(reason.find("Radial TOMS748")==std::string::npos&&
+           reason.find("Positive scalar")==std::string::npos&&
+           reason.find("Tire collider leaves measured surface coverage")==std::string::npos)throw;
+        // Nested scalar trials may have no admissible intermediate radius even
+        // when the original three-equation system has a local positive root.
+        // Reset every trial completely and solve the unchanged equations jointly.
+        const double cscale=std::max(1000.,initial_coefficients[i]);
+        const double kscale=std::max(1000.,initial_tangents[i]);
+        const auto &vertical=i<2?p_.vertical_front:p_.vertical_rear;
+        const double rscale=mf62_free_radius(vertical,wheel_speeds_radps_[i]);
+        Eigen::Vector3d lower(minimum/cscale,minimum/kscale,1e-6/rscale);
+        Eigen::Vector3d upper(maximum/cscale,maximum/kscale,1.+1e-12);
+        Eigen::Vector3d seed(initial_coefficients[i]/cscale,initial_tangents[i]/kscale,
+                             coupled_seed_radii[i]/rscale);
+        auto coupled=[&](const Eigen::Vector3d &u){
+          radial_force_coefficient_Npm_=coupled_seed_coefficients;
+          radial_k_Npm_=coupled_seed_tangents;
+          imr_.dynamic_tire_radius_m=coupled_seed_radii;
+          const double coefficient=u[0]*cscale,tangent=u[1]*kscale,radius=u[2]*rscale;
+          radial_force_coefficient_Npm_[i]=coefficient;
+          radial_k_Npm_[i]=tangent;
+          imr_.dynamic_tire_radius_m[i]=radius;
+          ++radial_root_evaluations_;evaluate_radial_contact();
+          const auto desired=target(i);
+          return Eigen::Vector3d((coefficient-desired[0])/std::max(1.,coefficient),
+            (tangent-desired[3])/std::max(1.,tangent),
+            (radius-imr_.dynamic_tire_radius_m[i])/(1e-3*std::max(.1,std::abs(radius))));
+        };
+        try{
+          Eigen::Vector3d root;
+          try{root=coupled_radial_root(coupled,seed,lower,upper);}
+          catch(const std::exception&){root=hybrid_radial_root(coupled,seed,lower,upper);}
+          const Eigen::Vector3d error=coupled(root);const auto desired=target(i);
+          if(!(error.lpNorm<Eigen::Infinity>()<1e-9))
+            throw std::runtime_error("Final coupled residual rejected");
+          if(!(desired[1]>.05&&desired[2]>.05&&desired[2]<5.))
+            throw std::domain_error("Radial softening outside positive-force domain after coupled solve");
+        }catch(const std::domain_error &failure){
+          if(std::string(failure.what()).find("Radial softening outside positive-force domain")!=std::string::npos)throw;
+          throw std::runtime_error(std::string("Radial TOMS748: coupled root failed: ")+failure.what());
+        }catch(const std::exception &failure){
+          throw std::runtime_error(std::string("Radial TOMS748: coupled root failed: ")+failure.what());
+        }
       }
-      if (!(lo < hi && std::isfinite(fl) && std::isfinite(fh) && fl * fh <= 0.))
-        throw std::domain_error("Radial TOMS748: no sign-changing positive coefficient bracket");
-      boost::uintmax_t iterations = 80;
-      auto bracket = boost::math::tools::toms748_solve(
-        residual, lo, hi, fl, fh, boost::math::tools::eps_tolerance<double>(44), iterations);
-      const double root = .5 * (bracket.first + bracket.second);
-      const double rr = residual(root);
-      auto t = target(i);
-      if (!(std::abs(rr) / std::max(1., root) < 1e-9 && t[1] > .05 && t[2] > .05 && t[2] < 5.))
-        throw std::domain_error(
-          "Radial TOMS748: root fails residual or unchanged positive-force guards");
-      radial_force_coefficient_Npm_[i] = root;
-      radial_k_Npm_[i] = t[3];
     }
     evaluate_radial_contact();
     radial_iteration_residual_ = 0.;
@@ -259,9 +369,13 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
   }
 
   calculate_tire_forces_N();
+  if(p_.ring_enabled>.5)calculate_tire_rolling_resistance_N();
+  calculate_ring_reactions();
   for (int i = 0; i < 4; ++i) {
-    imr_.tire_forces_N[i][0] += imr_.contact_force_x_N[i];
-    imr_.tire_forces_N[i][1] += imr_.contact_force_y_N[i];
+    if (p_.ring_enabled < .5) {
+      imr_.tire_forces_N[i][0] += imr_.contact_force_x_N[i];
+      imr_.tire_forces_N[i][1] += imr_.contact_force_y_N[i];
+    } // The ring branch has already transmitted these loads through its sidewall.
     const double delta = imr_.effective_steering_angle_per_wheel_rad[i];
     const double lateral =
       -std::sin(delta) * imr_.tire_forces_N[i][0] + std::cos(delta) * imr_.tire_forces_N[i][1];
@@ -352,7 +466,8 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
                                  initial * initial * device_travel) +
                     .5 * coil * device_travel * device_travel;
     if (p_.endstop_enabled > .5 && p_.kinematics_enabled > .5) {
-      const double initial_stroke = axle == 0 ? 1.0 : 1.0, travel = axle == 0 ? 1.0 : 1.0,
+      const double initial_stroke = axle == 0 ? p_.endstop_heave_initial_stroke_f : p_.endstop_heave_initial_stroke_r,
+                   travel = axle == 0 ? p_.endstop_heave_travel_f : p_.endstop_heave_travel_r,
                    c = initial_stroke + device_travel;
       const double penetration = std::max(0., c - travel) - std::max(0., -c);
       force -= p_.endstop_stiffness * penetration;
@@ -371,6 +486,7 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
   calculate_aerodynamics();
   calculate_resulting_force_N();
   calculate_resulting_torque_Nm();
+  if(p_.ring_enabled>.5){imr_.resulting_torque_Nm.x+=ring_pitch_correction_[0];imr_.resulting_torque_Nm.y+=ring_pitch_correction_[1];}
   // The new third element is derived from sprung-body attachment kinematics.
   // Native pitch moments use the whole-vehicle CoG and a gravity offset; apply
   // only this element's moment correction so its force obeys virtual work.

@@ -1,29 +1,32 @@
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 #include "ocd_steering_actuator_pt1_cpp/steering_actuator_pt1_model.hpp"
+using Model = tam::ocd::steering_actuator::PT1SteeringActuatorModel;
+
 int main()
 {
-  using tam::ocd::steering_actuator::PT1SteeringActuatorModel;
-  PT1SteeringActuatorModel model;
-  auto p = model.get_param_manager();
-  p->set_value("steering_actuator.use_damped_pt2", true);
-  p->set_value("steering_actuator.natural_frequency_hz", 1.0);
-  p->set_value("steering_actuator.damping_ratio", 1.0);
-  p->set_value("steering_actuator.angle_rate_max_radps", 1.0);
-  model.set_driver_input({1.0});
-  auto state = model.get_x_vec();
-  const double dt = 1.0;
-  double peak = 1.0;
-  for (int i = 0; i < 1; ++i) {
+  Model model;
+  auto parameters = model.get_param_manager();
+  parameters->set_value("steering_actuator.use_damped_pt2", true);
+  parameters->set_value("steering_actuator.natural_frequency_hz", 4.);
+  parameters->set_value("steering_actuator.damping_ratio", .35);
+  parameters->set_value("steering_actuator.angle_max_rad", .5);
+  parameters->set_value("steering_actuator.angle_rate_max_radps", 10.);
+  model.set_driver_input({.2});
+  auto state = Model::StateVectorType::Zero().eval();
+  double peak = 0.;
+  constexpr double dt = .0005;
+  for (int i = 0; i < 2000; ++i) {
     model.set_x_vec(state);
     model.evaluate();
-    state += dt * model.get_x_dot_vec();
+    const auto derivative = model.get_x_dot_vec();
+    if (std::abs(derivative[0]) > 10. + 1e-12)
+      throw std::runtime_error("PT2 exceeded slew limit");
+    state += dt * derivative;
     peak = std::max(peak, state[0]);
-    if (std::abs(model.get_x_dot_vec()[0]) > 1.0)
-      throw std::runtime_error("PT2 exceeded physical slew bound");
   }
-  if (!(peak > 1.0 && peak < 1.0 && std::abs(state[0] - 1.0) < 1.0))
-    throw std::runtime_error("PT2 failed damped overshoot/settling check");
+  if (!(peak > .21 && peak < .5 && std::abs(state[0] - .2) < .001))
+    throw std::runtime_error("PT2 overshoot or settling incorrect");
 }

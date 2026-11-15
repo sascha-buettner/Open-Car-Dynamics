@@ -112,6 +112,7 @@ template <
 void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_drivetrain_load_torque_Nm()
 {
   for (int i = 0; i < 4; ++i) {
+    if(p_.ring_enabled>.5){drivetrain_load_torque_per_wheel_Nm_[i]=ring_spin_load_Nm_[i];continue;}
     drivetrain_load_torque_per_wheel_Nm_[i] =
       (imr_.tire_forces_tire_frame_N[i][0] * contact_frames_[i].spin_lever_scale +
        imr_.tire_rolling_resistance_N[i]) *

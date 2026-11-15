@@ -5,6 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#ifdef EAV24_STEP_TIMING
+#include <chrono>
+#include <cstdint>
+#endif
 #include <eigen3/Eigen/Dense>
 #include <memory>
 #include <string>
@@ -31,6 +35,14 @@
 #include "tum_types_cpp/common.hpp"
 namespace tam::ocd::vehicle_dynamics
 {
+#ifdef EAV24_STEP_TIMING
+struct VehicleDynamicsStepTiming
+{
+  double contact_us{0.}, surface_us{0.}, tire_us{0.};
+  std::uint64_t contact_calls{0}, surface_calls{0}, tire_calls{0};
+};
+#endif
+
 // Forward declaration of the friend class
 template <
   tam::ocd::interfaces::concepts::TireModel TireModelT,
@@ -82,6 +94,15 @@ class VehicleDynamicsDoubleTrackEqns
     double h_rc;  // [m]
     double mf62_vertical_enabled{1.0}, mf62_rolling_enabled{1.0}, effective_radius_only{1.0};
     double longitudinal_relaxation_length_m{1.0};
+    double longitudinal_recovery_length_front_m{0.0};
+    double longitudinal_recovery_length_rear_m{0.0};
+    double longitudinal_recovery_gate_width{0.0};
+    double longitudinal_relaxation_speed_min_mps{0.}, longitudinal_relaxation_speed_max_mps{0.};
+    double lateral_relaxation_length_m{0.}, lateral_relaxation_speed_min_mps{0.};
+    double lateral_relaxation_speed_max_mps{0.};
+    double lateral_relaxation_reference_front_N{0.}, lateral_relaxation_reference_rear_N{0.};
+    double lateral_deflection_tau_min_s{0.}, lateral_deflection_length_m{0.};
+    double lateral_deflection_speed_min_mps{0.};
     MF62Vertical vertical_front{}, vertical_rear{};
     double_per_wheel_t inflation_reference_absolute_Pa{1.0, 1.0, 1.0, 1.0};
     double kinematics_enabled{1.0}, corner_weights_enabled{1.0}, material_velocity_enabled{1.0};
@@ -93,6 +114,8 @@ class VehicleDynamicsDoubleTrackEqns
       rear_third_device_compression{1.0 / 1.0, 1.0 / 1.0};
     double geometry_enabled{1.0};
     double endstop_enabled{1.0}, endstop_stiffness{1.0}, endstop_damping{1.0};
+    double endstop_heave_initial_stroke_f{0.}, endstop_heave_initial_stroke_r{0.};
+    double endstop_heave_travel_f{0.}, endstop_heave_travel_r{0.};
     double stroke_bump_front{1.0}, stroke_rebound_front{1.0};
     double stroke_bump_rear{1.0}, stroke_rebound_rear{1.0};
     double caster_rad{1.0}, kingpin_inclination_rad{1.0};
@@ -116,8 +139,11 @@ class VehicleDynamicsDoubleTrackEqns
     std::vector<double> damper_bump_r{1.0, 1.0}, damper_rebound_r{1.0, 1.0};
     // Optional radial-only Generic lookup. Tangential equations/states unchanged.
     double radial_lookup_enabled{1.0}, radial_conditioning_enabled{1.0}, radial_frozen_preload{1.0};
+    std::vector<double> radial_grid_speeds{}, radial_grid_pressures{}, radial_grid_loads{};
+    std::vector<double> radial_grid_front{}, radial_grid_rear{};
     double radial_stiffness_scale{1.0}, radial_nominal_stiffness{1.0};
     double low_load_boundary_N{1.0}, load_memory_fraction{1.0}, load_memory_tau_s{1.0};
+    double load_memory_release_tau_s{0.};
     double fy_radial_mode{1.0}, fy_relaxation_strength{1.0};
     double radial_robust_solver_enabled{1.0};
     double force_conditioning_enabled{1.0};
@@ -151,6 +177,10 @@ class VehicleDynamicsDoubleTrackEqns
     double belt_enabled{1.0}, belt_mass_f{1.0}, belt_mass_r{1.0};
     double belt_frequency_f{1.0}, belt_frequency_r{1.0};
     double belt_damping_ratio_f{1.0}, belt_damping_ratio_r{1.0};
+    double ring_enabled{1.0}, ring_inertia_trans{1.0}, ring_inertia_spin{1.0};
+    double ring_frequency_lat{1.0}, ring_frequency_yaw{1.0}, ring_frequency_windup{1.0};
+    double ring_damping_lat{1.0}, ring_damping_yaw{1.0}, ring_damping_windup{1.0};
+    double ring_longitudinal_stiffness{1.0}, ring_residual_relaxation{1.0}, ring_lateral_shear_fraction{1.0};
     double lateral_stiffness_f{1.0}, lateral_stiffness_r{1.0};
     double sidewall_height_f{1.0}, sidewall_height_r{1.0};
     double lateral_drop_scale{1.0};
@@ -177,6 +207,7 @@ class VehicleDynamicsDoubleTrackEqns
   double_per_wheel_t radial_preload_N_{};
   double_per_wheel_t radial_force_coefficient_Npm_{};
   double_per_wheel_t radial_nominal_compression_m_{};
+  GenericRadialLookup radial_lookup_{};
   std::array<GenericRadialCompliance, 4> radial_compliance_{};
   std::vector<double> radial_compliance_reference_signature_{};
   double radial_iteration_residual_{0.};
@@ -325,6 +356,15 @@ class VehicleDynamicsDoubleTrackEqns
   double_per_wheel_t point_road_gx_{0, 0, 0, 0}, point_road_gy_{0, 0, 0, 0},
     point_road_h_{0, 0, 0, 0};
   FivePointContact contact_;
+#ifdef EAV24_STEP_TIMING
+  bool step_timing_enabled_{false};
+  VehicleDynamicsStepTiming step_timing_{};
+  using TimingClock = std::chrono::steady_clock;
+  static double elapsed_us(TimingClock::time_point start)
+  {
+    return std::chrono::duration<double, std::micro>(TimingClock::now() - start).count();
+  }
+#endif
   void calculate_local_road_contact();
   tam::types::common::DataPerWheel<TireModelT> tire_models_;
   AeroModelT aero_model_;
@@ -346,6 +386,12 @@ class VehicleDynamicsDoubleTrackEqns
   // Function to calculate pars of the intermediate results.
   void calc_dynamic_tire_radius();
   void calculate_effective_steering_angle();
+  std::array<double_per_wheel_t,10> ring_derivatives_{};
+  double_per_wheel_t ring_spin_load_Nm_{}, ring_stored_energy_{}, ring_loss_{}, ring_tire_pitch_correction_Nm_{}, ring_radial_spindle_N_{};
+  double_per_wheel_t wheel_kinematic_slip_{};
+  Eigen::Vector3d ring_pitch_correction_{Eigen::Vector3d::Zero()};
+  void calculate_ring_reactions();
+  Eigen::Vector3d ring_planar_acceleration() const;
   void calculate_dependent_parameters();
   void calculate_tire_spring_initial_compression_m();
   void calculate_tire_spring_force_N();
@@ -374,6 +420,13 @@ class VehicleDynamicsDoubleTrackEqns
   void calculate_steering_load_torque_Nm();
   //
 public:
+#ifdef EAV24_STEP_TIMING
+  void begin_step_timing(bool enabled)
+  {
+    step_timing_enabled_ = enabled;
+    step_timing_ = {};
+  }
+#endif
   void set_wheel_speeds(const double_per_wheel_t & wheel_speeds_radps)
   {
     wheel_speeds_radps_ = wheel_speeds_radps;

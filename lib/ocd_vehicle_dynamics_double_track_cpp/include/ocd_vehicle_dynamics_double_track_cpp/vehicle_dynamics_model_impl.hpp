@@ -137,6 +137,11 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::register_log_signa
   }
   logger_->log("configuration/enveloping_radius_front_m", &eqns_.p_.enveloping_radius_f);
   logger_->log("configuration/enveloping_radius_rear_m", &eqns_.p_.enveloping_radius_r);
+  logger_->log("kinematic/wheel_longitudinal_slip", &eqns_.wheel_kinematic_slip_);
+  logger_->log("configuration/mfschwift_enabled", &eqns_.p_.ring_enabled);
+  logger_->log("mfschwift/ring_energy_J", &eqns_.ring_stored_energy_);
+  logger_->log("mfschwift/sidewall_dissipation_W", &eqns_.ring_loss_);
+  logger_->log("mfschwift/spindle_spin_load_Nm", &eqns_.ring_spin_load_Nm_);
   logger_->log("configuration/belt_enabled", &eqns_.p_.belt_enabled);
   logger_->log("configuration/belt_mass_front_kg", &eqns_.p_.belt_mass_f);
   logger_->log("configuration/belt_mass_rear_kg", &eqns_.p_.belt_mass_r);
@@ -297,14 +302,18 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
     "Height of the pitch center during deceleration");  //  [m]
   p_def_d(
     "suspension.roll_center_height_m", 0.2, &eqns_.p_.h_rc, "Height of the roll center");  //  [m]
-  p_def_d("suspension.endstop.enabled", 1.0, &eqns_.p_.endstop_enabled);
+  p_def_d("suspension.endstop.enabled", 0.0, &eqns_.p_.endstop_enabled);
   p_def_d("suspension.endstop.stiffness_Npm", 1.0, &eqns_.p_.endstop_stiffness);
   p_def_d("suspension.endstop.damping_Nspm", 1.0, &eqns_.p_.endstop_damping);
+  p_def_d("suspension.endstop.heave_initial_stroke_m.front", 0., &eqns_.p_.endstop_heave_initial_stroke_f);
+  p_def_d("suspension.endstop.heave_initial_stroke_m.rear", 0., &eqns_.p_.endstop_heave_initial_stroke_r);
+  p_def_d("suspension.endstop.heave_travel_m.front", 0., &eqns_.p_.endstop_heave_travel_f);
+  p_def_d("suspension.endstop.heave_travel_m.rear", 0., &eqns_.p_.endstop_heave_travel_r);
   p_def_d("suspension.endstop.bump_travel_m.front", 1.0, &eqns_.p_.stroke_bump_front);
   p_def_d("suspension.endstop.rebound_travel_m.front", 1.0, &eqns_.p_.stroke_rebound_front);
   p_def_d("suspension.endstop.bump_travel_m.rear", 1.0, &eqns_.p_.stroke_bump_rear);
   p_def_d("suspension.endstop.rebound_travel_m.rear", 1.0, &eqns_.p_.stroke_rebound_rear);
-  p_def_d("suspension.geometry.enabled", 1.0, &eqns_.p_.geometry_enabled);
+  p_def_d("suspension.geometry.enabled", 0.0, &eqns_.p_.geometry_enabled);
   p_def_d("suspension.geometry.caster_rad", 1.0, &eqns_.p_.caster_rad);
   p_def_d("suspension.geometry.kingpin_inclination_rad", 1.0, &eqns_.p_.kingpin_inclination_rad);
   param_manager_->declare_parameter(
@@ -362,8 +371,8 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
   p_def_d(
     "suspension.vehicle_damper_coefficient_Nspm.rear", 900.0, &eqns_.p_.d_r,
     "Considerung the travel at the virtual suspension point at 0.5 track width");  // [N*s/m]
-  p_def_d("suspension.damper_curve.enabled.front", 1.0, &eqns_.p_.damper_curve_enabled_f);
-  p_def_d("suspension.damper_curve.enabled.rear", 1.0, &eqns_.p_.damper_curve_enabled_r);
+  p_def_d("suspension.damper_curve.enabled.front", 0.0, &eqns_.p_.damper_curve_enabled_f);
+  p_def_d("suspension.damper_curve.enabled.rear", 0.0, &eqns_.p_.damper_curve_enabled_r);
   p_def_d(
     "suspension.damper_curve.wheel_damper_motion_ratio.front", 1.0,
     &eqns_.p_.damper_motion_ratio_f);
@@ -381,21 +390,32 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
       tam::pmg::ParameterType::DOUBLE_ARRAY,
       "Measured shaft-speed / shaft-force curve; wheel force uses reciprocal motion ratio");
 
-  p_def_d("tire.atmosphere_Pa", 1.0, &eqns_.p_.atmosphere_Pa);
-  p_def_d("tire.radial_lookup.enabled", 1.0, &eqns_.p_.radial_lookup_enabled);
-  p_def_d("tire.radial_lookup.robust_solver.enabled", 1.0, &eqns_.p_.radial_robust_solver_enabled);
-  p_def_d("tire.low_load_continuation.boundary_N", 1.0, &eqns_.p_.low_load_boundary_N);
+  p_def_d("tire.atmosphere_Pa", 0.0, &eqns_.p_.atmosphere_Pa);
+  p_def_d("tire.radial_lookup.enabled", 0.0, &eqns_.p_.radial_lookup_enabled);
+  for (auto [name, target] : std::initializer_list<std::pair<const char *, std::vector<double> *>>{
+         {"speed_mps", &eqns_.p_.radial_grid_speeds},
+         {"pressure_gauge_Pa", &eqns_.p_.radial_grid_pressures},
+         {"load_N", &eqns_.p_.radial_grid_loads},
+         {"stiffness_Npm.front", &eqns_.p_.radial_grid_front},
+         {"stiffness_Npm.rear", &eqns_.p_.radial_grid_rear}})
+    param_manager_->declare_parameter(
+      std::string("vehicle_dynamics_double_track.tire.radial_lookup.grid.") + name, target,
+      std::vector<double>{}, tam::pmg::ParameterType::DOUBLE_ARRAY,
+      "Explicit private radial lookup grid; stiffness is flattened speed, pressure, load");
+  p_def_d("tire.radial_lookup.robust_solver.enabled", 0.0, &eqns_.p_.radial_robust_solver_enabled);
+  p_def_d("tire.low_load_continuation.boundary_N", 0.0, &eqns_.p_.low_load_boundary_N);
   p_def_d("tire.contact.sampling_points", 1.0, &eqns_.p_.contact_sampling_points);
-  p_def_d("tire.sidewall.enabled", 1.0, &eqns_.p_.sidewall_enabled);
-  p_def_d("tire.mf62_vertical.contact_force_coupling", 1.0, &eqns_.p_.mf62_contact_force_coupling);
-  p_def_d("suspension.static_roll_centers.enabled", 1.0, &eqns_.p_.static_roll_centers_enabled);
+  p_def_d("tire.sidewall.enabled", 0.0, &eqns_.p_.sidewall_enabled);
+  p_def_d("tire.mf62_vertical.contact_force_coupling", 0.0, &eqns_.p_.mf62_contact_force_coupling);
+  p_def_d("suspension.static_roll_centers.enabled", 0.0, &eqns_.p_.static_roll_centers_enabled);
   p_def_d("suspension.static_roll_centers.height_m.front", 1.0, &eqns_.p_.h_rc_front);
   p_def_d("suspension.static_roll_centers.height_m.rear", 1.0, &eqns_.p_.h_rc_rear);
-  p_def_d("tire.load_memory.fraction", 1.0, &eqns_.p_.load_memory_fraction);
+  p_def_d("tire.load_memory.fraction", 0.0, &eqns_.p_.load_memory_fraction);
   p_def_d("tire.load_memory.build_tau_s", 1.0, &eqns_.p_.load_memory_tau_s);
-  p_def_d("tire.fy_radial.mode", 1.0, &eqns_.p_.fy_radial_mode);
-  p_def_d("tire.fy_relaxation.strength", 1.0, &eqns_.p_.fy_relaxation_strength);
-  p_def_d("tire.force_conditioning.enabled", 1.0, &eqns_.p_.force_conditioning_enabled);
+  p_def_d("tire.load_memory.release_tau_s", 0.0, &eqns_.p_.load_memory_release_tau_s);
+  p_def_d("tire.fy_radial.mode", 0.0, &eqns_.p_.fy_radial_mode);
+  p_def_d("tire.fy_relaxation.strength", 0.0, &eqns_.p_.fy_relaxation_strength);
+  p_def_d("tire.force_conditioning.enabled", 0.0, &eqns_.p_.force_conditioning_enabled);
   p_def_d("tire.force_conditioning.kappa.front_left", 1.0, &eqns_.p_.force_condition_kappa[0]);
   p_def_d("tire.force_conditioning.alpha_rad.front_left", 1.0, &eqns_.p_.force_condition_alpha[0]);
   p_def_d("tire.force_conditioning.fy_N.front_left", 1.0, &eqns_.p_.radial_condition_fy_N[0]);
@@ -411,11 +431,11 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
 
   p_def_d("tire.radial_lookup.stiffness_scale", 1.0, &eqns_.p_.radial_stiffness_scale);
   p_def_d("tire.radial_lookup.nominal_stiffness", 1.0, &eqns_.p_.radial_nominal_stiffness);
-  p_def_d("tire.radial_lookup.speed_override.enabled", 1.0, &eqns_.p_.radial_speed_override_enabled);
-  p_def_d("tire.radial_lookup.conditioning.enabled", 1.0, &eqns_.p_.radial_conditioning_enabled);
+  p_def_d("tire.radial_lookup.speed_override.enabled", 0.0, &eqns_.p_.radial_speed_override_enabled);
+  p_def_d("tire.radial_lookup.conditioning.enabled", 0.0, &eqns_.p_.radial_conditioning_enabled);
   p_def_d("tire.radial_lookup.conditioning.frozen_preload", 1.0, &eqns_.p_.radial_frozen_preload);
   p_def_d("tire.radial_lookup.conditioning.speed_mps", 1.0, &eqns_.p_.radial_speed_mps);
-  p_def_d("tire.radial_lookup.softening_fraction", 1.0, &eqns_.p_.radial_softening_fraction);
+  p_def_d("tire.radial_lookup.softening_fraction", 0.0, &eqns_.p_.radial_softening_fraction);
   p_def_d("tire.radial_lookup.force_reference_N.front", 1.0, &eqns_.p_.radial_force_reference_f);
   p_def_d("tire.radial_lookup.force_reference_N.rear", 1.0, &eqns_.p_.radial_force_reference_r);
   for (int i = 0; i < 4; ++i) {
@@ -445,8 +465,8 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
     "vehicle_dynamics_double_track.suspension.geometry.equivalent_travel_m.rear",
     &eqns_.p_.geometry_equiv_rear, eqns_.p_.geometry_equiv_rear,
     tam::pmg::ParameterType::DOUBLE_ARRAY, "Normalized mechanism jounce; derivative1 at nominal");
-  p_def_d("tire.mf62_vertical.enabled", 1.0, &eqns_.p_.mf62_vertical_enabled);
-  p_def_d("tire.mf62_vertical.rolling_enabled", 1.0, &eqns_.p_.mf62_rolling_enabled);
+  p_def_d("tire.mf62_vertical.enabled", 0.0, &eqns_.p_.mf62_vertical_enabled);
+  p_def_d("tire.mf62_vertical.rolling_enabled", 0.0, &eqns_.p_.mf62_rolling_enabled);
   p_def_d(
     "tire.mf62_vertical.front.UNLOADED_RADIUS", eqns_.p_.vertical_front.UNLOADED_RADIUS,
     &eqns_.p_.vertical_front.UNLOADED_RADIUS);
@@ -645,11 +665,11 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
   p_def_d(
     "tire.inflation_reference_absolute_Pa.rear_right", 1.0,
     &eqns_.p_.inflation_reference_absolute_Pa.rear_right);
-  p_def_d("suspension.kinematics.enabled", 1.0, &eqns_.p_.kinematics_enabled);
+  p_def_d("suspension.kinematics.enabled", 0.0, &eqns_.p_.kinematics_enabled);
   p_def_d(
-    "suspension.kinematics.material_velocity_enabled", 1.0, &eqns_.p_.material_velocity_enabled,
+    "suspension.kinematics.material_velocity_enabled", 0.0, &eqns_.p_.material_velocity_enabled,
     "Reciprocal contact material velocity for coupled suspension; zero is a historical diagnostic");
-  p_def_d("suspension.corner_weights.enabled", 1.0, &eqns_.p_.corner_weights_enabled);
+  p_def_d("suspension.corner_weights.enabled", 0.0, &eqns_.p_.corner_weights_enabled);
   p_def_d(
     "suspension.corner_weights.kg.front_left", eqns_.p_.corner_weights_kg.front_left,
     &eqns_.p_.corner_weights_kg.front_left);
@@ -839,28 +859,53 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
   p_def_d("suspension.camber_out_rad.rear_left", 0.0, &eqns_.p_.camber_out_rad.rear_left);
   p_def_d("suspension.camber_out_rad.rear_right", 0.0, &eqns_.p_.camber_out_rad.rear_right);
 
-  p_def_d("tire.contact.belt.enabled", 1.0, &eqns_.p_.belt_enabled);
+  p_def_d("tire.mfschwift.lateral_shear_centre_radius_fraction", 0.0, &eqns_.p_.ring_lateral_shear_fraction);
+  p_def_d("tire.mfschwift.enabled", 0.0, &eqns_.p_.ring_enabled);
+  p_def_d("tire.mfschwift.inertia_transverse_kgm2", 0.0, &eqns_.p_.ring_inertia_trans);
+  p_def_d("tire.mfschwift.inertia_spin_kgm2", 0.0, &eqns_.p_.ring_inertia_spin);
+  p_def_d("tire.mfschwift.frequency_lateral_hz", 0.0, &eqns_.p_.ring_frequency_lat);
+  p_def_d("tire.mfschwift.frequency_yaw_camber_hz", 0.0, &eqns_.p_.ring_frequency_yaw);
+  p_def_d("tire.mfschwift.frequency_windup_hz", 0.0, &eqns_.p_.ring_frequency_windup);
+  p_def_d("tire.mfschwift.damping_lateral", 0.0, &eqns_.p_.ring_damping_lat);
+  p_def_d("tire.mfschwift.damping_yaw_camber", 0.0, &eqns_.p_.ring_damping_yaw);
+  p_def_d("tire.mfschwift.damping_windup", 0.0, &eqns_.p_.ring_damping_windup);
+  p_def_d("tire.mfschwift.longitudinal_stiffness_Npm", 0.0, &eqns_.p_.ring_longitudinal_stiffness);
+  p_def_d("tire.mfschwift.residual_relaxation_enabled", 0.0, &eqns_.p_.ring_residual_relaxation);
+  p_def_d("tire.contact.belt.enabled", 0.0, &eqns_.p_.belt_enabled);
   p_def_d("tire.contact.belt.mass_kg.front", 1.0, &eqns_.p_.belt_mass_f);
   p_def_d("tire.contact.belt.mass_kg.rear", 1.0, &eqns_.p_.belt_mass_r);
   p_def_d("tire.contact.belt.frequency_hz.front", 1.0, &eqns_.p_.belt_frequency_f);
   p_def_d("tire.contact.belt.frequency_hz.rear", 1.0, &eqns_.p_.belt_frequency_r);
-  p_def_d("suspension.resonant_damper.enabled", 1.0, &eqns_.p_.resonant_enabled);
-  p_def_d("tire.contact.belt.resonant.enabled", 1.0, &eqns_.p_.resonant_belt_enabled);
+  p_def_d("suspension.resonant_damper.enabled", 0.0, &eqns_.p_.resonant_enabled);
+  p_def_d("tire.contact.belt.resonant.enabled", 0.0, &eqns_.p_.resonant_belt_enabled);
   p_def_d("tire.contact.belt.resonant.frequency_hz", 1.0, &eqns_.p_.resonant_belt_hz);
   p_def_d("suspension.resonant_damper.frequency_hz", 1.0, &eqns_.p_.resonant_hz);
   p_def_d("suspension.resonant_damper.bandwidth_hz", 1.0, &eqns_.p_.resonant_width_hz);
   p_def_d("suspension.resonant_damper.residual_fraction", 1.0, &eqns_.p_.resonant_residual);
-  p_def_d("tire.contact.belt.maxwell.enabled", 1.0, &eqns_.p_.maxwell_enabled);
+  p_def_d("tire.contact.belt.maxwell.enabled", 0.0, &eqns_.p_.maxwell_enabled);
   p_def_d("tire.contact.belt.maxwell.frequency_hz", 1.0, &eqns_.p_.maxwell_hz);
   p_def_d("tire.contact.belt.maxwell.stiffness_fraction", 1.0, &eqns_.p_.maxwell_fraction);
   p_def_d("tire.contact.belt.maxwell.viscous_fraction", 1.0, &eqns_.p_.maxwell_viscous_fraction);
-  p_def_d("tire.effective_radius_only.enabled", 1.0, &eqns_.p_.effective_radius_only);
-  p_def_d("tire.longitudinal_relaxation_length_m", 1.0, &eqns_.p_.longitudinal_relaxation_length_m);
+  p_def_d("tire.effective_radius_only.enabled", 0.0, &eqns_.p_.effective_radius_only);
+  p_def_d("tire.longitudinal_relaxation_length_m", 0.3, &eqns_.p_.longitudinal_relaxation_length_m);
+  p_def_d("tire.relaxation.longitudinal.recovery_length_m.front", 0.0, &eqns_.p_.longitudinal_recovery_length_front_m);
+  p_def_d("tire.relaxation.longitudinal.recovery_length_m.rear", 0.0, &eqns_.p_.longitudinal_recovery_length_rear_m);
+  p_def_d("tire.relaxation.longitudinal.recovery_gate_width", 0.0, &eqns_.p_.longitudinal_recovery_gate_width);
+  p_def_d("tire.relaxation.longitudinal.min_speed_mps", 10.0, &eqns_.p_.longitudinal_relaxation_speed_min_mps);
+  p_def_d("tire.relaxation.longitudinal.max_speed_mps", 100.0, &eqns_.p_.longitudinal_relaxation_speed_max_mps);
+  p_def_d("tire.relaxation.lateral.length_m", 0.2, &eqns_.p_.lateral_relaxation_length_m);
+  p_def_d("tire.relaxation.lateral.min_speed_mps", 10.0, &eqns_.p_.lateral_relaxation_speed_min_mps);
+  p_def_d("tire.relaxation.lateral.max_speed_mps", 100.0, &eqns_.p_.lateral_relaxation_speed_max_mps);
+  p_def_d("tire.relaxation.lateral.reference_load_N.front", 0.0, &eqns_.p_.lateral_relaxation_reference_front_N);
+  p_def_d("tire.relaxation.lateral.reference_load_N.rear", 0.0, &eqns_.p_.lateral_relaxation_reference_rear_N);
+  p_def_d("tire.lateral_deflection.min_time_s", 0.0, &eqns_.p_.lateral_deflection_tau_min_s);
+  p_def_d("tire.lateral_deflection.length_m", 0.0, &eqns_.p_.lateral_deflection_length_m);
+  p_def_d("tire.lateral_deflection.min_speed_mps", 0.0, &eqns_.p_.lateral_deflection_speed_min_mps);
   p_def_d("tire.contact.belt.damping_ratio.front", 1.0, &eqns_.p_.belt_damping_ratio_f);
   p_def_d("tire.contact.belt.damping_ratio.rear", 1.0, &eqns_.p_.belt_damping_ratio_r);
-  p_def_d("tire.contact.enabled", 1.0, &eqns_.p_.contact_enabled);
+  p_def_d("tire.contact.enabled", 0.0, &eqns_.p_.contact_enabled);
   p_def_d(
-    "tire.contact.strict_surface_coverage", 1.0, &eqns_.p_.strict_surface_coverage,
+    "tire.contact.strict_surface_coverage", 0.0, &eqns_.p_.strict_surface_coverage,
     "Reject missing collider coverage instead of a discontinuous ribbon fallback");
   p_def_d("tire.contact.damping_Nspm.front", 1.0, &eqns_.p_.tire_damping_f);
   p_def_d("tire.contact.damping_Nspm.rear", 1.0, &eqns_.p_.tire_damping_r);
@@ -882,13 +927,13 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
     "Bound the unvalidated vertical coupling at the tire-sheet 20-mm lateral range");
   p_def_d("suspension.bump_stop_gap_m.front", 1.0, &eqns_.p_.bump_gap_f);
   p_def_d("suspension.bump_stop_gap_m.rear", 1.0, &eqns_.p_.bump_gap_r);
-  p_def_d("suspension.bump_stop_stiffness_Npm2.front", 1.0, &eqns_.p_.bump_stiffness_f);
-  p_def_d("suspension.bump_stop_stiffness_Npm2.rear", 1.0, &eqns_.p_.bump_stiffness_r);
+  p_def_d("suspension.bump_stop_stiffness_Npm2.front", 0.0, &eqns_.p_.bump_stiffness_f);
+  p_def_d("suspension.bump_stop_stiffness_Npm2.rear", 0.0, &eqns_.p_.bump_stiffness_r);
 
-  p_def_d("suspension.heave.spring_stiffness_Npm.front", 1.0, &eqns_.p_.heave_spring_f);
-  p_def_d("suspension.heave.spring_stiffness_Npm.rear", 1.0, &eqns_.p_.heave_spring_r);
-  p_def_d("suspension.heave.rubber_stiffness_Npm2.front", 1.0, &eqns_.p_.heave_stiffness_f);
-  p_def_d("suspension.heave.rubber_stiffness_Npm2.rear", 1.0, &eqns_.p_.heave_stiffness_r);
+  p_def_d("suspension.heave.spring_stiffness_Npm.front", 0.0, &eqns_.p_.heave_spring_f);
+  p_def_d("suspension.heave.spring_stiffness_Npm.rear", 0.0, &eqns_.p_.heave_spring_r);
+  p_def_d("suspension.heave.rubber_stiffness_Npm2.front", 0.0, &eqns_.p_.heave_stiffness_f);
+  p_def_d("suspension.heave.rubber_stiffness_Npm2.rear", 0.0, &eqns_.p_.heave_stiffness_r);
   p_def_d("suspension.heave.device_gap_m.front", 1.0, &eqns_.p_.heave_gap_f);
   p_def_d("suspension.heave.device_gap_m.rear", 1.0, &eqns_.p_.heave_gap_r);
   p_def_d("suspension.heave.wheel_device_motion_ratio.front", 1.0, &eqns_.p_.heave_motion_ratio_f);

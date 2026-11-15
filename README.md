@@ -257,6 +257,10 @@ Therefore, we can only provide a parametrization that resembles a generic single
 For tire parameters, we provide a set of MF52 parameters taken from https://github.com/TUMFTM/sim_vehicle_dynamics as default.
 This parameter set resembles a sport focused road tire.
 
+The plain double-track plus MF5.2 model runs with these generic public defaults. Extensions such as measured suspension kinematics, five-point contact, belt dynamics and tire recovery are opt-in; their parameter placeholders are not a vehicle calibration.
+
+Synthetic equation probes are [available on demand](lib/ocd_vehicle_dynamics_double_track_cpp/MODEL_PROBES.md); ordinary builds do not compile them.
+
 ## 4. Contributing
 
 We welcome contributions to Open Car Dynamics! Contributing is as simple as implementing a new submodel by inheriting and implementing a respective base class and creating a new package. Because of the modular design, your new submodel can then be seamlessly combined with existing components.

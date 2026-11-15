@@ -88,6 +88,11 @@ PT1SteeringActuatorModel::DoublePerWheelType PT1SteeringActuatorModel::get_steer
   out.front_right = actual_steering_angle_rad_;
   const auto & knots = p_.ackermann_mean_angle_rad;
   const auto & fractions = p_.ackermann_fraction;
+  if (knots.empty() && fractions.empty()) {
+    out.rear_left = 0.;
+    out.rear_right = 0.;
+    return out;
+  }
   if (
     knots.size() < 2 || knots.size() != fractions.size() || knots.front() != 0. ||
     !(std::isfinite(p_.ackermann_track_m) && p_.ackermann_track_m > 0.) ||
@@ -151,9 +156,9 @@ void PT1SteeringActuatorModel::declare_parameters()
     "Wheelbase [m]");
   param_manager_->declare_parameter(
     "steering_actuator.ackermann.mean_angle_rad", &p_.ackermann_mean_angle_rad,
-    std::vector<double>{1.0, 1.0}, pt::DOUBLE_ARRAY, "Absolute mean tire-angle knots [rad]");
+    std::vector<double>{}, pt::DOUBLE_ARRAY, "Absolute mean tire-angle knots [rad]");
   param_manager_->declare_parameter(
-    "steering_actuator.ackermann.fraction", &p_.ackermann_fraction, std::vector<double>{1.0, 1.0},
+    "steering_actuator.ackermann.fraction", &p_.ackermann_fraction, std::vector<double>{},
     pt::DOUBLE_ARRAY, "Standard Ackermann fraction, not percent");
   param_manager_->declare_parameter("steering_actuator.T_PT1", &p_.T_PT1, 0.06, pt::DOUBLE, "");
   param_manager_->declare_parameter(
@@ -161,10 +166,10 @@ void PT1SteeringActuatorModel::declare_parameters()
   param_manager_->declare_parameter(
     "steering_actuator.angle_rate_max_radps", &p_.angle_rate_max_radps, 0.5, pt::DOUBLE, "");
   param_manager_->declare_parameter(
-    "steering_actuator.angle_rate_rise_max_radps", &p_.angle_rate_rise_max_radps, 1.0, pt::DOUBLE,
+    "steering_actuator.angle_rate_rise_max_radps", &p_.angle_rate_rise_max_radps, -1.0, pt::DOUBLE,
     "Positive tire-angle slew limit; -1 inherits angle_rate_max_radps");
   param_manager_->declare_parameter(
-    "steering_actuator.angle_rate_fall_max_radps", &p_.angle_rate_fall_max_radps, 1.0, pt::DOUBLE,
+    "steering_actuator.angle_rate_fall_max_radps", &p_.angle_rate_fall_max_radps, -1.0, pt::DOUBLE,
     "Negative tire-angle slew magnitude; -1 inherits angle_rate_max_radps");
   param_manager_->declare_parameter(
     "steering_actuator.static_offset_rad", &p_.static_offset_rad, 0.0, pt::DOUBLE,

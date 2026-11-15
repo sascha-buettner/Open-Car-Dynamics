@@ -50,7 +50,8 @@ ament_target_dependencies(${PROJECT_NAME} ${MODEL_DEPENDENCIES})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET) # so client can also call target_link_libraries(template_lib_cpp::template_lib_cpp)
 ament_export_dependencies(${MODEL_DEPENDENCIES}) # other dependencies so client does not need to call find_package on them
 
-if(BUILD_TESTING)
+option(OCD_BUILD_MODEL_PROBES "Build optional synthetic model probes" OFF)
+if(OCD_BUILD_MODEL_PROBES)
   enable_testing()
   add_executable(steering_ackermann_test test/ackermann.cpp)
   target_link_libraries(steering_ackermann_test ${PROJECT_NAME})

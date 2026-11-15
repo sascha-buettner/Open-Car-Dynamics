@@ -127,7 +127,7 @@ void MF52::declare_parameters(
   tam::pmg::ParamReferenceManager * param_manager, std::string name_prefix)
 {
   param_manager->declare_parameter(
-    name_prefix + "FITTYP", &p_.FITTYP, 1.0, tam::pmg::ParameterType::DOUBLE,
+    name_prefix + "FITTYP", &p_.FITTYP, 52.0, tam::pmg::ParameterType::DOUBLE,
     "MF6.2 manufacturer coefficient; opt-in FITTYP62");
   param_manager->declare_parameter(
     name_prefix + "UNLOADED_RADIUS", &p_.UNLOADED_RADIUS, 1.0, tam::pmg::ParameterType::DOUBLE,
@@ -356,10 +356,10 @@ void MF52::declare_parameters(
   param_manager->declare_parameter(name_prefix + "PKY6", &(p_.PKY6), 0.0    , tam::pmg::ParameterType::DOUBLE, "Lateral force, Fy, camber stiffness factor"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PKY7", &(p_.PKY7), 0.0    , tam::pmg::ParameterType::DOUBLE, "Camber stiffness vertical load dependency"); // NOLINT
   param_manager->declare_parameter(name_prefix + "NOMPRES", &(p_.NOMPRES), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
-  param_manager->declare_parameter(name_prefix + "PPX1", &(p_.PPX1), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
-  param_manager->declare_parameter(name_prefix + "PPX2", &(p_.PPX2), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
-  param_manager->declare_parameter(name_prefix + "PPX3", &(p_.PPX3), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
-  param_manager->declare_parameter(name_prefix + "PPX4", &(p_.PPX4), 1.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX1", &(p_.PPX1), 0.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX2", &(p_.PPX2), 0.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX3", &(p_.PPX3), 0.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
+  param_manager->declare_parameter(name_prefix + "PPX4", &(p_.PPX4), 0.0, tam::pmg::ParameterType::DOUBLE, "MF6 inflation correction from supplied tire file");
   param_manager->declare_parameter(name_prefix + "PPY1", &(p_.PPY1), 0.0    , tam::pmg::ParameterType::DOUBLE, "Cornering stiffness variation with inflation pressure"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PPY2", &(p_.PPY2), 0.0    , tam::pmg::ParameterType::DOUBLE, "Cornering stiffness variation with inflation pressure induced nominal load dependency"); // NOLINT
   param_manager->declare_parameter(name_prefix + "PPY3", &(p_.PPY3), 0.0    , tam::pmg::ParameterType::DOUBLE, "Linear inflation pressure on peak lateral friction"); // NOLINT

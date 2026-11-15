@@ -65,6 +65,46 @@ namespace tam::ocd::vehicle_dynamics::double_track::States
   X(contact_capacity_FR_N) \
   X(contact_capacity_RL_N) \
   X(contact_capacity_RR_N) \
+  X(ring_x_FL_m) \
+  X(ring_x_FR_m) \
+  X(ring_x_RL_m) \
+  X(ring_x_RR_m) \
+  X(ring_y_FL_m) \
+  X(ring_y_FR_m) \
+  X(ring_y_RL_m) \
+  X(ring_y_RR_m) \
+  X(ring_vx_FL_mps) \
+  X(ring_vx_FR_mps) \
+  X(ring_vx_RL_mps) \
+  X(ring_vx_RR_mps) \
+  X(ring_vy_FL_mps) \
+  X(ring_vy_FR_mps) \
+  X(ring_vy_RL_mps) \
+  X(ring_vy_RR_mps) \
+  X(ring_camber_FL_rad) \
+  X(ring_camber_FR_rad) \
+  X(ring_camber_RL_rad) \
+  X(ring_camber_RR_rad) \
+  X(ring_windup_FL_rad) \
+  X(ring_windup_FR_rad) \
+  X(ring_windup_RL_rad) \
+  X(ring_windup_RR_rad) \
+  X(ring_yaw_FL_rad) \
+  X(ring_yaw_FR_rad) \
+  X(ring_yaw_RL_rad) \
+  X(ring_yaw_RR_rad) \
+  X(ring_omega_x_FL_radps) \
+  X(ring_omega_x_FR_radps) \
+  X(ring_omega_x_RL_radps) \
+  X(ring_omega_x_RR_radps) \
+  X(ring_omega_y_FL_radps) \
+  X(ring_omega_y_FR_radps) \
+  X(ring_omega_y_RL_radps) \
+  X(ring_omega_y_RR_radps) \
+  X(ring_omega_z_FL_radps) \
+  X(ring_omega_z_FR_radps) \
+  X(ring_omega_z_RL_radps) \
+  X(ring_omega_z_RR_radps) \
 // clang-format on
 /*
   x_m              ->  x position of the vehicle in m

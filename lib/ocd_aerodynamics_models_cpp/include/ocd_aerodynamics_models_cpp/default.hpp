@@ -18,7 +18,7 @@ public:
   struct Parameters
   {
     // Opt-in, bounded local surrogate of published attitude-map sensitivities.
-    double attitude_enabled{1.0}, attitude_lift_gain{1.0}, attitude_center_gain{1.0};
+    double attitude_enabled{0.0}, attitude_lift_gain{1.0}, attitude_center_gain{1.0};
     double attitude_unsteady_gain{1.0}, attitude_reference_z_m{1.0};
     double attitude_wheelbase_m{1.0}, attitude_front_distance_m{1.0};
     double attitude_lift_front_gradient_per_m{1.0}, attitude_lift_rear_gradient_per_m{1.0};

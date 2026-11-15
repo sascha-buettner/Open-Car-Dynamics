@@ -86,8 +86,18 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_velocity_
     imr_.dynamic_tire_radius_m.rear_left * wheel_speeds_radps_.rear_left;
   imr_.velocity_tire_rotation_mps.rear_right =  // p_.rr_w_r * wheel_speeds_radps_.rear_right;
     imr_.dynamic_tire_radius_m.rear_right * wheel_speeds_radps_.rear_right;
-  for (int i = 0; i < 4; ++i)
+  for (int i = 0; i < 4; ++i){
+    const double hub_ground=imr_.velocity_wheel_over_ground_tire_frame_mps[i][0];
+    const double hub_rotation=imr_.velocity_tire_rotation_mps[i]*contact_frames_[i].spin_lever_scale;
+    wheel_kinematic_slip_[i]=std::clamp((hub_rotation-hub_ground)/std::max(3.,hub_ground),-1.,1.);
+    if(p_.ring_enabled>.5){
+      const double d=imr_.effective_steering_angle_per_wheel_rad[i],c=std::cos(d),s=std::sin(d);
+      const double vx=x_vec_[x::ring_vx_FL_mps+i],vy=x_vec_[x::ring_vy_FL_mps+i];
+      imr_.velocity_wheel_over_ground_tire_frame_mps[i]={c*vx+s*vy,-s*vx+c*vy+imr_.dynamic_tire_radius_m[i]*x_vec_[x::ring_omega_x_FL_radps+i]};
+      imr_.velocity_tire_rotation_mps[i]=imr_.dynamic_tire_radius_m[i]*x_vec_[x::ring_omega_y_FL_radps+i];
+    }
     imr_.velocity_tire_rotation_mps[i] *= contact_frames_[i].spin_lever_scale;
+  }
 }
 template <
   tam::ocd::interfaces::concepts::TireModel TireModelT,
@@ -167,8 +177,17 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_forc
       slip_angle_rad = p_.force_condition_alpha[wheel];
     }
     const double force_load = std::max(F_z_N, p_.low_load_boundary_N);
+#ifdef EAV24_STEP_TIMING
+    const auto tire_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
     auto out = model.evaluate(
       {long_slip, mirror_factor * slip_angle_rad, force_load, -camber_out_rad, pressure_Pa});
+#ifdef EAV24_STEP_TIMING
+    if (step_timing_enabled_) {
+      step_timing_.tire_us += elapsed_us(tire_start);
+      ++step_timing_.tire_calls;
+    }
+#endif
     const double low_scale = F_z_N / force_load;
     const double memory =
       p_.load_memory_fraction > 0.
@@ -236,7 +255,7 @@ template <
   tam::ocd::interfaces::concepts::AerodynamicsModel AeroModelT>
 void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_rolling_resistance_N()
 {
-  if (p_.mf62_vertical_enabled > .5 && p_.mf62_rolling_enabled > .5) {
+  if ((p_.mf62_vertical_enabled > .5 && p_.mf62_rolling_enabled > .5) || p_.ring_enabled > .5) {
     for (int i = 0; i < 4; ++i) {
       const auto & t = i < 2 ? p_.vertical_front : p_.vertical_rear;
       imr_.tire_rolling_resistance_N[i] =

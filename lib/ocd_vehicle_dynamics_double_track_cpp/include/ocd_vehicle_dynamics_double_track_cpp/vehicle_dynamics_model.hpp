@@ -43,6 +43,10 @@ public:
   {
     eqns_.road_surface_ = std::move(surface);
   }
+#ifdef EAV24_STEP_TIMING
+  void begin_step_timing(bool enabled) { eqns_.begin_step_timing(enabled); }
+  VehicleDynamicsStepTiming get_step_timing() const { return eqns_.step_timing_; }
+#endif
   // Evaluate the model
   void evaluate() override;
   // Getting outputs

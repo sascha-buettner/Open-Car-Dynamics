@@ -42,6 +42,9 @@ template <
   interfaces::concepts::VehicleDynamicsModel VD_MODEL_T>
 void VEHICLE_T::step()
 {
+#ifdef EAV24_STEP_TIMING
+  const auto outer_start = TimingClock::now();
+#endif
   // Init local variables
   const double h = param_manager_->get_value("integration_step_size_s").as_double();
   const auto substeps = param_manager_->get_value("integration_substeps").as_int();
@@ -50,6 +53,12 @@ void VEHICLE_T::step()
       "Integration requires positive finite dt and 1..8 synchronous substeps");
 
   state_input_recording_ = param_manager_->get_value("recording.state_input_only").as_bool();
+#ifdef EAV24_STEP_TIMING
+  step_timing_active_ = state_input_recording_;
+  step_timing_ = {};
+  if constexpr (requires { vehicle_dynamics_model_.begin_step_timing(true); })
+    vehicle_dynamics_model_.begin_step_timing(step_timing_active_);
+#endif
   excitation_trigger_mode_ =
     param_manager_->get_value("diagnostic_excitation.trigger_mode").as_double();
   excitation_mode_ = param_manager_->get_value("diagnostic_excitation.mode").as_double();
@@ -91,13 +100,25 @@ void VEHICLE_T::step()
   // Every substep advances the complete coupled state and queries contact at
   // each stage. The external control/readout clock remains h (normally 800 Hz).
   const double inner_h = h / static_cast<double>(substeps);
+#ifdef EAV24_STEP_TIMING
+  const auto integrator_start = TimingClock::now();
+#endif
   for (std::int64_t i = 0; i < substeps; ++i)
     x = tam::helpers::numerical::integration_step_DoPri45<state_vector_t>(
       bound_ode, i * inner_h, x, inner_h);
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.integrator_us = elapsed_us(integrator_start);
+#endif
 
   // Refresh derivatives and outputs at the accepted state. Dormand-Prince's
   // final evaluated stage is not necessarily the accepted state.
+#ifdef EAV24_STEP_TIMING
+  const auto refresh_start = TimingClock::now();
+#endif
   ode(h, x);
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.refresh_us = elapsed_us(refresh_start);
+#endif
   integration_time_s_ += h;
 
   model_output_.vehicle_dynamics_output = vehicle_dynamics_output_;
@@ -105,7 +126,13 @@ void VEHICLE_T::step()
   model_output_.drivetrain_load_torque_per_wheel_Nm = drivetrain_load_torque_per_wheel_Nm_;
   model_output_.steering_angle_per_wheel_rad = steering_angle_per_wheel_rad_;
   model_output_.steering_load_torque_per_wheel_Nm = steering_load_torque_per_wheel_Nm_;
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.outer_us = elapsed_us(outer_start);
+#endif
   if (state_input_recording_) record_state_and_inputs();
+#ifdef EAV24_STEP_TIMING
+  step_timing_active_ = false;
+#endif
 }
 template <
   interfaces::concepts::DrivetrainModel DT_MODEL_T,
@@ -125,6 +152,9 @@ template <
   interfaces::concepts::VehicleDynamicsModel VD_MODEL_T>
 VEHICLE_T::state_vector_t VEHICLE_T::ode(double t, state_vector_t x_)
 {
+#ifdef EAV24_STEP_TIMING
+  const auto ode_start = step_timing_active_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
   // Silence warning of unused param
   if constexpr (requires { drivetrain_model_.set_time(0.); })
     drivetrain_model_.set_time(integration_time_s_ + t);
@@ -136,7 +166,13 @@ VEHICLE_T::state_vector_t VEHICLE_T::ode(double t, state_vector_t x_)
   // Evaluate steering actuator
   steering_actuator_model_.set_driver_input(steering_actuator_driver_input_);
   steering_actuator_model_.set_load(steering_load_torque_per_wheel_Nm_);
+#ifdef EAV24_STEP_TIMING
+  const auto steering_start = step_timing_active_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
   steering_actuator_model_.evaluate();
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.steering_us += elapsed_us(steering_start);
+#endif
   steering_angle_per_wheel_rad_ = steering_actuator_model_.get_steering_angles();
   if constexpr (!std::is_void_v<typename SA_MODEL_T::FeedbackType>) {
     steering_actuator_feedback_ = steering_actuator_model_.get_feedback();
@@ -221,7 +257,13 @@ VEHICLE_T::state_vector_t VEHICLE_T::ode(double t, state_vector_t x_)
   }
   debug_container_->log("excitation/mechanical_power_W", power);
 
+#ifdef EAV24_STEP_TIMING
+  const auto dynamics_start = step_timing_active_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
   vehicle_dynamics_model_.evaluate();
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.dynamics_us += elapsed_us(dynamics_start);
+#endif
   drivetrain_load_torque_per_wheel_Nm_ = vehicle_dynamics_model_.get_wheel_load();
   steering_load_torque_per_wheel_Nm_ = vehicle_dynamics_model_.get_steering_load();
   vehicle_dynamics_output_ = vehicle_dynamics_model_.get_vehicle_dynamics_output();
@@ -232,7 +274,13 @@ VEHICLE_T::state_vector_t VEHICLE_T::ode(double t, state_vector_t x_)
   // region eval the drivetrain model
   drivetrain_model_.set_driver_input(drivetrain_driver_input_);
   drivetrain_model_.set_load(drivetrain_load_torque_per_wheel_Nm_);
+#ifdef EAV24_STEP_TIMING
+  const auto drivetrain_start = step_timing_active_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
   drivetrain_model_.evaluate();
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) step_timing_.drivetrain_us += elapsed_us(drivetrain_start);
+#endif
   wheel_speeds_radps_ = drivetrain_model_.get_wheel_speeds();
   if constexpr (!std::is_void_v<typename DT_MODEL_T::FeedbackType>) {
     drivetrain_feedback_ = drivetrain_model_.get_feedback();
@@ -240,6 +288,12 @@ VEHICLE_T::state_vector_t VEHICLE_T::ode(double t, state_vector_t x_)
   x_dot_.segment(OFFSET_DT, DT_MODEL_T::k_state_vector_length) = drivetrain_model_.get_x_dot_vec();
   // endregion
 
+#ifdef EAV24_STEP_TIMING
+  if (step_timing_active_) {
+    step_timing_.ode_us += elapsed_us(ode_start);
+    ++step_timing_.ode_calls;
+  }
+#endif
   return x_dot_;
 }
 template <
@@ -345,6 +399,25 @@ void VEHICLE_T::record_state_and_inputs()
 {
   auto & logger = *state_input_logger_;
   logger.log("native_time_s", integration_time_s_);
+#ifdef EAV24_STEP_TIMING
+  logger.log("timing/outer_us", step_timing_.outer_us);
+  logger.log("timing/integrator_us", step_timing_.integrator_us);
+  logger.log("timing/refresh_us", step_timing_.refresh_us);
+  logger.log("timing/ode_us", step_timing_.ode_us);
+  logger.log("timing/steering_us", step_timing_.steering_us);
+  logger.log("timing/dynamics_us", step_timing_.dynamics_us);
+  logger.log("timing/drivetrain_us", step_timing_.drivetrain_us);
+  logger.log("timing/ode_calls", static_cast<double>(step_timing_.ode_calls));
+  if constexpr (requires { vehicle_dynamics_model_.get_step_timing(); }) {
+    const auto detail = vehicle_dynamics_model_.get_step_timing();
+    logger.log("timing/contact_us", detail.contact_us);
+    logger.log("timing/surface_us", detail.surface_us);
+    logger.log("timing/tire_us", detail.tire_us);
+    logger.log("timing/contact_calls", static_cast<double>(detail.contact_calls));
+    logger.log("timing/surface_calls", static_cast<double>(detail.surface_calls));
+    logger.log("timing/tire_calls", static_cast<double>(detail.tire_calls));
+  }
+#endif
   auto states = [&](const auto & names, const std::string & group, std::size_t offset) {
     for (std::size_t i = 0; i < names.size(); ++i)
       logger.log("state/" + group + "/" + std::string(names[i]), x[offset + i]);

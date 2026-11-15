@@ -7,6 +7,9 @@
 #include <string>
 
 #include "ocd_vehicle_dynamics_double_track_cpp/stage_road_cache.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/positive_residual_root.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/coupled_radial_root.hpp"
+#include "ocd_vehicle_dynamics_double_track_cpp/hybrid_radial_root.hpp"
 #include "ocd_vehicle_dynamics_double_track_cpp/vehicle_dynamics_equations.hpp"
 
 #define EVAL_MACRO_PER_WHEEL(x) \
@@ -17,6 +20,7 @@
 
 // The implementation is grouped by physical subsystem. Public parameters and
 // state ordering remain defined by the model interface.
+#include "ocd_vehicle_dynamics_double_track_cpp/detail/mf_schwift_vehicle.hpp"
 #include "ocd_vehicle_dynamics_double_track_cpp/detail/body_dynamics.hpp"
 #include "ocd_vehicle_dynamics_double_track_cpp/detail/diagnostics.hpp"
 #include "ocd_vehicle_dynamics_double_track_cpp/detail/equation_pipeline.hpp"

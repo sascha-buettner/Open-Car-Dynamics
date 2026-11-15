@@ -46,7 +46,7 @@ void VehicleDynamicsDoubleTrackEqns<
                                ? p_.corner_weights_kg[j] * G_CONST
                                : p_.m * G_CONST * (j < 2 ? p_dep_.l_r : p_.l_f) / (2 * p_.l);
             GenericRadialCompliance curve;
-            curve.reset(j >= 2, 0., p_.inflation_reference_absolute_Pa[j] - p_.atmosphere_Pa);
+            curve.reset(radial_lookup_, j >= 2, 0., p_.inflation_reference_absolute_Pa[j] - p_.atmosphere_Pa);
             radial_nominal_compression_m_[j] = p_.radial_nominal_stiffness > .5
                                                  ? f / (j < 2 ? p_.c_t_f : p_.c_t_r)
                                                  : curve.values(f)[0];
@@ -83,6 +83,9 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_spri
   point_road_gy_ = {0, 0, 0, 0};
   point_road_h_ = external_influences_.z_height_road_m;
   if (road_surface_ && p_.contact_enabled < .5) {
+#ifdef EAV24_STEP_TIMING
+    const auto surface_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
     road_surface_->prepare(x_vec_[x::x_m], x_vec_[x::y_m], x_vec_[x::psi_rad]);
     const double c = std::cos(x_vec_[x::psi_rad]), ss = std::sin(x_vec_[x::psi_rad]);
     for (int i = 0; i < 4; ++i) {
@@ -95,6 +98,12 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_spri
       point_road_gx_[i] = q.gradient_x;
       point_road_gy_[i] = q.gradient_y;
     }
+#ifdef EAV24_STEP_TIMING
+    if (step_timing_enabled_) {
+      step_timing_.surface_us += elapsed_us(surface_start);
+      step_timing_.surface_calls += 5;
+    }
+#endif
   }
 
   if (p_.mf62_vertical_enabled > .5) {
@@ -222,8 +231,17 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_spri
           const int as[4] = {
             x::alpha_tire_FL, x::alpha_tire_FR, x::alpha_tire_RL, x::alpha_tire_RR};
           const double mirror = i % 2 ? -1. : 1.;
+#ifdef EAV24_STEP_TIMING
+          const auto tire_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
           const auto f = tire_models_[i].evaluate(
             {x_vec_[ks[i]], mirror * x_vec_[as[i]], std::max(normal, .001), gamma, pressure});
+#ifdef EAV24_STEP_TIMING
+          if (step_timing_enabled_) {
+            step_timing_.tire_us += elapsed_us(tire_start);
+            ++step_timing_.tire_calls;
+          }
+#endif
           fx = f.longitudinal_force_N * external_influences_.lambda_mue[i];
           fy = f.lateral_force_N * external_influences_.lambda_mue[i];
         }
@@ -322,7 +340,18 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_local_roa
     if (!(std::isfinite(nonnegative) && nonnegative >= 0.))
       throw std::invalid_argument(
         "Contact geometry, damping and lateral coupling must be nonnegative and finite");
+#ifdef EAV24_STEP_TIMING
+  if (road_surface_) {
+    const auto surface_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+    road_surface_->prepare(x_vec_[x::x_m], x_vec_[x::y_m], x_vec_[x::psi_rad]);
+    if (step_timing_enabled_) {
+      step_timing_.surface_us += elapsed_us(surface_start);
+      ++step_timing_.surface_calls;
+    }
+  }
+#else
   if (road_surface_) road_surface_->prepare(x_vec_[x::x_m], x_vec_[x::y_m], x_vec_[x::psi_rad]);
+#endif
   const int latidx[4] = {
     x::lateral_deflection_tire_FL_m, x::lateral_deflection_tire_FR_m,
     x::lateral_deflection_tire_RL_m, x::lateral_deflection_tire_RR_m};
@@ -391,13 +420,25 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_local_roa
       lateral, half_width + lateral, -half_width + lateral, half_width + lateral,
       -half_width + lateral};
     for (int i = 0; i < 5; ++i) {
-      const double bx = wx[w] + cd * px[i] - sd * py[i], by = wy[w] + sd * px[i] + cd * py[i];
+      // Small camber rotation about the ring centre moves the patch by R*gamma.
+      const double gamma = p_.ring_enabled>.5?x_vec_[x::ring_camber_FL_rad+w]:0.;
+      const double patch_shift = imr_.dynamic_tire_radius_m[w]*gamma;
+      const double bx = wx[w] + cd * px[i] - sd * (py[i]+patch_shift) + (p_.ring_enabled>.5?x_vec_[x::ring_x_FL_m+w]:0.), by = wy[w] + sd * px[i] + cd * (py[i]+patch_shift) + (p_.ring_enabled>.5?x_vec_[x::ring_y_FL_m+w]:0.);
       const double qx = x_vec_[x::x_m] + cp * bx - sp * by, qy = x_vec_[x::y_m] + sp * bx + cp * by;
       double h = external_influences_.z_height_road_m[w], dx = 0, dy = 0;
       if (road_surface_) {
+#ifdef EAV24_STEP_TIMING
+        const auto surface_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
         const auto sample = road_surface_->tire_contact(
           qx, qy, x_vec_[x::psi_rad] + delta,
           w < 2 ? p_.enveloping_radius_f : p_.enveloping_radius_r, p_.contact_micro_radius);
+#ifdef EAV24_STEP_TIMING
+        if (step_timing_enabled_) {
+          step_timing_.surface_us += elapsed_us(surface_start);
+          ++step_timing_.surface_calls;
+        }
+#endif
         if (sample.valid) {
           h += sample.height_m;
           if (sample.bridged_missing_centre) imr_.contact_bridged_samples[w] += 1.;
@@ -427,12 +468,33 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_local_roa
         }
         heights[i] = h + reference - x_vec_[zidx[w]] - (p_.belt_enabled > .5 ? 0. : drop);
       }
+      if(p_.ring_enabled>.5)heights[i]-=x_vec_[x::ring_camber_FL_rad+w]*py[i];
       const double pointvx =
         vxglobal + x_vec_[x::psi_dot_radps] * (-sp * (bx - wx[w]) - cp * (by - wy[w]));
       const double pointvy =
         vyglobal + x_vec_[x::psi_dot_radps] * (cp * (bx - wx[w]) - sp * (by - wy[w]));
       rates[i] = dx * pointvx + dy * pointvy - x_vec_[vidx[w]] +
                  heading_derivative[i] * x_vec_[x::psi_dot_radps];
+      if(p_.ring_enabled>.5){
+        const double yaw_rate=x_vec_[x::psi_dot_radps];
+        const double joint_rate=p_.kinematics_enabled>.5?kinematic_q_velocity_mps_[w]:0.;
+        const double hp=x_vec_[x::phi_dot_radps]+(p_.kinematics_enabled>.5?kinematic_angjac_x_[w]*joint_rate:0.);
+        const double hq=x_vec_[x::theta_dot_radps]+(p_.kinematics_enabled>.5?kinematic_angjac_y_[w]*joint_rate:0.);
+        double hvx=vx+imr_.dynamic_tire_radius_m[w]*hq,hvy=vy-imr_.dynamic_tire_radius_m[w]*hp;
+        if(p_.kinematics_enabled>.5 && p_.material_velocity_enabled>.5){
+          const double h=p_.h_cg+x_vec_[x::z_m];
+          hvx=x_vec_[x::v_x_mps]-(kinematic_contact_y_[w]-vehicle_cg_y_m_)*yaw_rate-h*x_vec_[x::theta_dot_radps]+kinematic_jac_x_[w]*joint_rate+imr_.dynamic_tire_radius_m[w]*hq;
+          hvy=x_vec_[x::v_y_mps]+(wx[w]+kinematic_contact_x_[w])*yaw_rate+h*x_vec_[x::phi_dot_radps]+kinematic_jac_y_[w]*joint_rate-imr_.dynamic_tire_radius_m[w]*hp;
+        }
+        const double qdx=x_vec_[x::ring_vx_FL_mps+w]-hvx+yaw_rate*x_vec_[x::ring_y_FL_m+w];
+        const double qdy=x_vec_[x::ring_vy_FL_mps+w]-hvy-yaw_rate*x_vec_[x::ring_x_FL_m+w];
+        const double hub_delta=delta-x_vec_[x::ring_yaw_FL_rad+w];
+        const double gamma_rate=x_vec_[x::ring_omega_x_FL_radps+w]-(std::cos(hub_delta)*hp+std::sin(hub_delta)*hq);
+        const double delta_rate=x_vec_[x::ring_omega_z_FL_radps+w]-yaw_rate;
+        const double rx=qdx-delta_rate*(sd*px[i]+cd*(py[i]+patch_shift))-sd*imr_.dynamic_tire_radius_m[w]*gamma_rate;
+        const double ry=qdy+delta_rate*(cd*px[i]-sd*(py[i]+patch_shift))+cd*imr_.dynamic_tire_radius_m[w]*gamma_rate;
+        rates[i]+=dx*(cp*rx-sp*ry)+dy*(sp*rx+cp*ry)+heading_derivative[i]*delta_rate-gamma_rate*py[i];
+      }
       gx[i] = cp * dx + sp * dy;
       gy[i] = -sp * dx + cp * dy;
       if (i == 0) imr_.road_contact_height_m[w] = h;
@@ -456,7 +518,16 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_local_roa
           p_.force_conditioning_enabled > .5 ? p_.force_condition_kappa[w] : x_vec_[ks[w]];
         const double alpha =
           p_.force_conditioning_enabled > .5 ? p_.force_condition_alpha[w] : x_vec_[as[w]];
+#ifdef EAV24_STEP_TIMING
+        const auto tire_start = step_timing_enabled_ ? TimingClock::now() : TimingClock::time_point{};
+#endif
         const auto force = tire_models_[w].evaluate({kappa, mirror * alpha, load, gamma, pressure});
+#ifdef EAV24_STEP_TIMING
+        if (step_timing_enabled_) {
+          step_timing_.tire_us += elapsed_us(tire_start);
+          ++step_timing_.tire_calls;
+        }
+#endif
         const double memory =
           p_.load_memory_fraction > 0.
             ? load_capacity_factor(
@@ -486,7 +557,8 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_local_roa
         imr_.contact_node_road_z_m[i][w] - heights[i] + contact.belt_displacement_m[i];
       imr_.contact_force_x_N[w] -= contact.normal_N[i] * gx[i];
       imr_.contact_force_y_N[w] -= contact.normal_N[i] * gy[i];
-      const double bx = cd * px[i] - sd * py[i], by = sd * px[i] + cd * py[i];
+      const double patch_shift = p_.ring_enabled>.5?imr_.dynamic_tire_radius_m[w]*x_vec_[x::ring_camber_FL_rad+w]:0.;
+      const double bx = cd * px[i] - sd * (py[i]+patch_shift), by = sd * px[i] + cd * (py[i]+patch_shift);
       imr_.contact_yaw_moment_Nm[w] +=
         contact.normal_N[i] * (by * gx[i] - bx * gy[i] - heading_derivative[i]);
     }

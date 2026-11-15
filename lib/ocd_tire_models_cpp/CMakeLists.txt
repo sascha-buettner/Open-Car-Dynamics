@@ -59,7 +59,8 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(Eigen3 tum_types_cpp param_management_cpp tum_helpers_cpp)
 
 # ament package boilerplate
-if(BUILD_TESTING)
+option(OCD_BUILD_MODEL_PROBES "Build optional synthetic model probes" OFF)
+if(OCD_BUILD_MODEL_PROBES)
  enable_testing()
  add_executable(pressure_test test/pressure.cpp)
  target_link_libraries(pressure_test ${PROJECT_NAME})

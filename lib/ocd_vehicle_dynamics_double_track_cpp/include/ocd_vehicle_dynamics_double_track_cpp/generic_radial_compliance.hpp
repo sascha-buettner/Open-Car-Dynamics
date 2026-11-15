@@ -10,6 +10,7 @@ namespace tam::ocd::vehicle_dynamics
 // Fixed-pressure/speed energy is E(F)=integral_0^F f/K(f) df.
 class GenericRadialCompliance
 {
+  const GenericRadialLookup * lookup_{nullptr};
   bool rear_ = false;
   double speed_ = std::numeric_limits<double>::quiet_NaN(), pressure_ = 0.;
   std::array<double, 9> compression_{}, energy_{};
@@ -27,7 +28,7 @@ class GenericRadialCompliance
       const double middle = a + (panel + .5) * width;
       for (int i = 0; i < 8; ++i) {
         const double f = middle + half * x[i],
-                     c = half * w[i] / GenericRadialLookup::stiffness(rear_, speed_, pressure_, f);
+                     c = half * w[i] / lookup_->stiffness(rear_, speed_, pressure_, f);
         value[0] += c;
         value[1] += f * c;
       }
@@ -36,9 +37,10 @@ class GenericRadialCompliance
   }
 
 public:
-  void reset(bool rear, double speed, double pressure)
+  void reset(const GenericRadialLookup & lookup, bool rear, double speed, double pressure)
   {
-    if (rear == rear_ && speed == speed_ && pressure == pressure_) return;
+    if (&lookup == lookup_ && rear == rear_ && speed == speed_ && pressure == pressure_) return;
+    lookup_ = &lookup;
     rear_ = rear;
     speed_ = speed;
     pressure_ = pressure;

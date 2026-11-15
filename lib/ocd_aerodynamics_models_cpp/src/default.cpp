@@ -99,7 +99,7 @@ void DefaultAerodynamicsModel::declare_parameters(
     tam::pmg::ParameterType::DOUBLE, "");
 
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.enabled", &p_.attitude_enabled, 1.0,
+    name_prefix + "attitude_map.enabled", &p_.attitude_enabled, 0.0,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(

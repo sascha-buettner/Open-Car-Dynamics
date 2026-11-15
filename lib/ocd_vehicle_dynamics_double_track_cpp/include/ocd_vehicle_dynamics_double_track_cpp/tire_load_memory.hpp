@@ -15,14 +15,17 @@ inline double load_capacity_factor(double normal, double remembered, double frac
   if (normal <= 0.) return 0.;
   return 1. - fraction + fraction * std::clamp(remembered / normal, 0., 1.);
 }
-inline double load_capacity_derivative(double normal, double remembered, double tau)
+inline double load_capacity_derivative(double normal, double remembered, double build_tau,
+                                       double release_tau)
 {
-  if (!(tau > 0. && std::isfinite(tau)))
-    throw std::invalid_argument("Positive load build-up time required");
-  return (normal - remembered) / (normal > remembered ? tau : 1.0);
+  if (!(build_tau > 0. && std::isfinite(build_tau) &&
+        release_tau > 0. && std::isfinite(release_tau)))
+    throw std::invalid_argument("Positive finite load memory times required");
+  return (normal - remembered) / (normal > remembered ? build_tau : release_tau);
 }
 inline double lateral_relaxation_factor(double normal, double reference, double strength)
 {
+  if (strength == 0.) return 1.;
   if (!(strength >= 0. && strength <= .1 && reference > 0.))
     throw std::invalid_argument("Small lateral load-memory sensitivity required");
   return 1. + strength * (std::max(0., normal) - reference) / (std::max(0., normal) + reference);

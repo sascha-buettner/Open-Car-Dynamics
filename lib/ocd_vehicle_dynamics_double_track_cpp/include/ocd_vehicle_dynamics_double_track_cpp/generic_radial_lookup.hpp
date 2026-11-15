@@ -4,28 +4,52 @@
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <vector>
 namespace tam::ocd::vehicle_dynamics
 {
-// Placeholder radial grid; no measured tire data are included.
-// Configured speed knots represent steady rolling speeds.
-// This is a radial-only empirical law: no tangential state or force is added.
+// Radial-only empirical law. The measured grid must come from private parameters.
 struct GenericRadialLookup
 {
   using LoadRow = std::array<double, 8>;
   using PressureRows = std::array<LoadRow, 4>;
   using SpeedRows = std::array<PressureRows, 3>;
-  // Deliberately dummy placeholder grid. Physical tire data must be configured privately.
-  static constexpr std::array<double, 3> speeds{1.0, 1.0, 1.0};
-  static constexpr std::array<double, 4> pressures{1.0, 1.0, 1.0, 1.0};
-  static constexpr std::array<double, 8> loads{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
-  static inline const SpeedRows front_data = [] {
-    SpeedRows data{};
-    for (auto & pressure_rows : data)
-      for (auto & load_row : pressure_rows)
-        load_row.fill(1.0);
-    return data;
-  }();
-  static inline const SpeedRows rear_data = front_data;
+  std::array<double, 3> speeds{};
+  std::array<double, 4> pressures{};
+  std::array<double, 8> loads{};
+  SpeedRows front_data{}, rear_data{};
+  bool configured_{false};
+  bool configured() const { return configured_; }
+  void configure(
+    const std::vector<double> & speed, const std::vector<double> & pressure,
+    const std::vector<double> & load, const std::vector<double> & front,
+    const std::vector<double> & rear)
+  {
+    if (speed.size() != speeds.size() || pressure.size() != pressures.size() ||
+        load.size() != loads.size() || front.size() != 3 * 4 * 8 || rear.size() != 3 * 4 * 8)
+      throw std::invalid_argument("Radial lookup grid is missing or has the wrong shape");
+    const auto ascending = [](const auto & values) {
+      if (!std::isfinite(values[0]) || values[0] <= 0.) return false;
+      for (std::size_t i = 1; i < values.size(); ++i)
+        if (!std::isfinite(values[i]) || values[i] <= values[i - 1]) return false;
+      return true;
+    };
+    if (!ascending(speed) || !ascending(pressure) || !ascending(load))
+      throw std::invalid_argument("Radial lookup knots must be positive and increasing");
+    for (int v = 0; v < 3; ++v)
+      for (int p = 0; p < 4; ++p)
+        for (int f = 0; f < 8; ++f) {
+          const std::size_t index = (v * 4 + p) * 8 + f;
+          if (!(std::isfinite(front[index]) && front[index] > 1000. &&
+                std::isfinite(rear[index]) && rear[index] > 1000.))
+            throw std::invalid_argument("Radial lookup stiffness must be finite and positive");
+          front_data[v][p][f] = front[index];
+          rear_data[v][p][f] = rear[index];
+        }
+    std::copy(speed.begin(), speed.end(), speeds.begin());
+    std::copy(pressure.begin(), pressure.end(), pressures.begin());
+    std::copy(load.begin(), load.end(), loads.begin());
+    configured_ = true;
+  }
   static double endpoint(double a, double b)
   {
     double d = (3. * a - b) / 2.;
@@ -33,7 +57,7 @@ struct GenericRadialLookup
     if (a * b < 0. && std::abs(d) > 3. * std::abs(a)) return 3. * a;
     return d;
   }
-  static double speed_spline(double speed, const std::array<double, 3> & y)
+  double speed_spline(double speed, const std::array<double, 3> & y) const
   {
     const double h = speeds[1] - speeds[0], a = (y[1] - y[0]) / h, b = (y[2] - y[1]) / h;
     const std::array<double, 3> d{
@@ -52,8 +76,9 @@ struct GenericRadialLookup
     return std::clamp(
       int(std::upper_bound(x.begin(), x.end(), value) - x.begin()) - 1, 0, int(N) - 2);
   }
-  static double stiffness(bool rear, double speed, double gauge, double load)
+  double stiffness(bool rear, double speed, double gauge, double load) const
   {
+    if (!configured_) throw std::logic_error("Radial lookup grid was not configured");
     if (!(std::isfinite(speed) && std::isfinite(gauge) && std::isfinite(load) && gauge > 0. &&
           load >= 0.))
       throw std::invalid_argument("Generic radial lookup input");

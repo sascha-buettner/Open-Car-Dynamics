@@ -47,8 +47,8 @@ inline Result evaluate(
   if (!std::isfinite(spin_radps)) throw std::invalid_argument("Nonfinite ring spin");
   Result out;
   Six gyro{};
-  gyro[3] = p.spin_inertia_kgm2 * spin_radps * velocity[5];
-  gyro[5] = -p.spin_inertia_kgm2 * spin_radps * velocity[3];
+  gyro[3] = -p.spin_inertia_kgm2 * spin_radps * velocity[5];
+  gyro[5] = p.spin_inertia_kgm2 * spin_radps * velocity[3];
   for (int i = 0; i < 6; ++i) {
     if (!(std::isfinite(mass[i]) && mass[i] > 0. && std::isfinite(frequency[i]) &&
           frequency[i] > 0. && std::isfinite(p.damping_ratio[i]) && p.damping_ratio[i] >= 0.))

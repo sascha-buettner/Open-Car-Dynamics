@@ -266,7 +266,9 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_axle_vert
         tire_mx_Nm_[i] *
           (std::cos(imr_.effective_steering_angle_per_wheel_rad[i]) * kinematic_angjac_x_[i] +
            std::sin(imr_.effective_steering_angle_per_wheel_rad[i]) * kinematic_angjac_y_[i]) +
-        tire_mz_Nm_[i] * kinematic_angjac_z_[i];
+        tire_mz_Nm_[i] * kinematic_angjac_z_[i] +
+        (p_.ring_enabled>.5?(ring_radial_spindle_N_[i]-imr_.vertical_tire_force_N[i])*(kinematic_jac_z_[i]-1.)
+          +ring_tire_pitch_correction_Nm_[i]*(-std::sin(imr_.effective_steering_angle_per_wheel_rad[i])*kinematic_angjac_x_[i]+std::cos(imr_.effective_steering_angle_per_wheel_rad[i])*kinematic_angjac_y_[i]):0.);
     return;
   }
 

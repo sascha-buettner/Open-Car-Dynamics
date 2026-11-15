@@ -25,7 +25,7 @@ Smaller integration steps cannot repair an invalid constitutive law.
 historical packed array encoding belongs only to the evaluation bench. Native
 force/energy, geometry, root-solver and ring-kernel contracts live in `test/`.
 
-`mf_schwift_ring.hpp` is an independently implemented six-coordinate linearized
-ring kernel, not an alias of the vertical belt and not a complete vehicle-admitted
-vendor MF-Swift implementation. Full vehicle/contact/spin/inertia coupling has
-an explicit separate admission gate. Do not call the steady MF6.2 branch Swift.
+The independent six-coordinate ring kernel and its optional vehicle/contact
+coupling are documented in [MF_SCHWIFT.md](MF_SCHWIFT.md). The switch is off by
+default. Native validation and frozen-runtime driving admission remain separate;
+the steady MF6.2 and vertical-belt branches are not relabelled as mfSCHWIFT.
