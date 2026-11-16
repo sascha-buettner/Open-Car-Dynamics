@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -43,6 +45,20 @@ types::AeroModelOutput DefaultAerodynamicsModel::evaluate(types::AeroModelInput 
     0.5 * (p_.c_l + delta_c_l) * p_.air_density_kgpm3 * p_.A_m2 * std::pow(vx_rel_mps, 2);
 
   if (p_.attitude_enabled > .5) {
+    const std::array<double, 15> required{
+      p_.attitude_lift_gain, p_.attitude_center_gain,
+      p_.attitude_unsteady_gain, p_.attitude_reference_z_m,
+      p_.attitude_wheelbase_m, p_.attitude_front_distance_m,
+      p_.attitude_lift_front_gradient_per_m, p_.attitude_lift_rear_gradient_per_m,
+      p_.attitude_balance_front_gradient_per_m, p_.attitude_balance_rear_gradient_per_m,
+      p_.attitude_lift_delta_min, p_.attitude_lift_delta_max,
+      p_.attitude_balance_delta_min, p_.attitude_balance_delta_max,
+      p_.attitude_minimum_speed_mps};
+    const double unset = std::numeric_limits<double>::lowest();
+    if (!std::all_of(required.begin(), required.end(), [unset](double value) {
+          return std::isfinite(value) && value != unset;
+        }))
+      throw std::invalid_argument("Enabled attitude aero requires explicit finite parameters");
     if (!(std::isfinite(p_.attitude_wheelbase_m) && p_.attitude_wheelbase_m > 0. &&
           p_.attitude_front_distance_m > 0. &&
           p_.attitude_front_distance_m < p_.attitude_wheelbase_m &&
@@ -83,6 +99,8 @@ types::AeroModelOutput DefaultAerodynamicsModel::evaluate(types::AeroModelInput 
 void DefaultAerodynamicsModel::declare_parameters(
   tam::pmg::ParamReferenceManager * param_manager, std::string name_prefix)
 {
+  // This finite nonphysical sentinel compares equal across repeated ROS declarations.
+  const double unset = std::numeric_limits<double>::lowest();
   param_manager->declare_parameter(
     name_prefix + "air_density_kgpm3", &(p_.air_density_kgpm3), 1.225,
     tam::pmg::ParameterType::DOUBLE, "");
@@ -103,60 +121,60 @@ void DefaultAerodynamicsModel::declare_parameters(
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.lift_gain", &p_.attitude_lift_gain, 1.0,
+    name_prefix + "attitude_map.lift_gain", &p_.attitude_lift_gain, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.center_gain", &p_.attitude_center_gain, 1.0,
+    name_prefix + "attitude_map.center_gain", &p_.attitude_center_gain, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.unsteady_gain", &p_.attitude_unsteady_gain, 1.0,
+    name_prefix + "attitude_map.unsteady_gain", &p_.attitude_unsteady_gain, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.reference_z_m", &p_.attitude_reference_z_m, 1.0,
+    name_prefix + "attitude_map.reference_z_m", &p_.attitude_reference_z_m, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.wheelbase_m", &p_.attitude_wheelbase_m, 1.0,
+    name_prefix + "attitude_map.wheelbase_m", &p_.attitude_wheelbase_m, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.front_distance_m", &p_.attitude_front_distance_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    name_prefix + "attitude_map.front_distance_m", &p_.attitude_front_distance_m, unset, tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.lift_front_gradient_per_m", &p_.attitude_lift_front_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    name_prefix + "attitude_map.lift_front_gradient_per_m", &p_.attitude_lift_front_gradient_per_m, unset, tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.lift_rear_gradient_per_m", &p_.attitude_lift_rear_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    name_prefix + "attitude_map.lift_rear_gradient_per_m", &p_.attitude_lift_rear_gradient_per_m, unset, tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
     name_prefix + "attitude_map.balance_front_gradient_per_m",
-    &p_.attitude_balance_front_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    &p_.attitude_balance_front_gradient_per_m, unset, tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
     name_prefix + "attitude_map.balance_rear_gradient_per_m",
-    &p_.attitude_balance_rear_gradient_per_m, 1.0, tam::pmg::ParameterType::DOUBLE,
+    &p_.attitude_balance_rear_gradient_per_m, unset, tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.lift_delta_min", &p_.attitude_lift_delta_min, 1.0,
+    name_prefix + "attitude_map.lift_delta_min", &p_.attitude_lift_delta_min, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.lift_delta_max", &p_.attitude_lift_delta_max, 1.0,
+    name_prefix + "attitude_map.lift_delta_max", &p_.attitude_lift_delta_max, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.balance_delta_min", &p_.attitude_balance_delta_min, 1.0,
+    name_prefix + "attitude_map.balance_delta_min", &p_.attitude_balance_delta_min, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.balance_delta_max", &p_.attitude_balance_delta_max, 1.0,
+    name_prefix + "attitude_map.balance_delta_max", &p_.attitude_balance_delta_max, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
   param_manager->declare_parameter(
-    name_prefix + "attitude_map.minimum_speed_mps", &p_.attitude_minimum_speed_mps, 1.0,
+    name_prefix + "attitude_map.minimum_speed_mps", &p_.attitude_minimum_speed_mps, unset,
     tam::pmg::ParameterType::DOUBLE,
     "Bounded literature-normalized sensitivity; not an identified DummyVehicle map");
 

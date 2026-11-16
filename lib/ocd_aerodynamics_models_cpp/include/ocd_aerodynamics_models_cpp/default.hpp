@@ -1,6 +1,5 @@
 // Copyright 2026 Simon Sagmeister
 #pragma once
-
 #include <limits>
 #include <memory>
 #include <string>
@@ -18,14 +17,22 @@ public:
   struct Parameters
   {
     // Opt-in, bounded local surrogate of published attitude-map sensitivities.
-    double attitude_enabled{0.0}, attitude_lift_gain{1.0}, attitude_center_gain{1.0};
-    double attitude_unsteady_gain{1.0}, attitude_reference_z_m{1.0};
-    double attitude_wheelbase_m{1.0}, attitude_front_distance_m{1.0};
-    double attitude_lift_front_gradient_per_m{1.0}, attitude_lift_rear_gradient_per_m{1.0};
-    double attitude_balance_front_gradient_per_m{1.0}, attitude_balance_rear_gradient_per_m{1.0};
-    double attitude_lift_delta_min{1.0}, attitude_lift_delta_max{1.0};
-    double attitude_balance_delta_min{1.0}, attitude_balance_delta_max{1.0};
-    double attitude_minimum_speed_mps{1.0};
+    double attitude_enabled{0.0};
+    double attitude_lift_gain{std::numeric_limits<double>::lowest()};
+    double attitude_center_gain{std::numeric_limits<double>::lowest()};
+    double attitude_unsteady_gain{std::numeric_limits<double>::lowest()};
+    double attitude_reference_z_m{std::numeric_limits<double>::lowest()};
+    double attitude_wheelbase_m{std::numeric_limits<double>::lowest()};
+    double attitude_front_distance_m{std::numeric_limits<double>::lowest()};
+    double attitude_lift_front_gradient_per_m{std::numeric_limits<double>::lowest()};
+    double attitude_lift_rear_gradient_per_m{std::numeric_limits<double>::lowest()};
+    double attitude_balance_front_gradient_per_m{std::numeric_limits<double>::lowest()};
+    double attitude_balance_rear_gradient_per_m{std::numeric_limits<double>::lowest()};
+    double attitude_lift_delta_min{std::numeric_limits<double>::lowest()};
+    double attitude_lift_delta_max{std::numeric_limits<double>::lowest()};
+    double attitude_balance_delta_min{std::numeric_limits<double>::lowest()};
+    double attitude_balance_delta_max{std::numeric_limits<double>::lowest()};
+    double attitude_minimum_speed_mps{std::numeric_limits<double>::lowest()};
     double air_density_kgpm3;  // Air density
 
     double c_d;   // Drag coefficient

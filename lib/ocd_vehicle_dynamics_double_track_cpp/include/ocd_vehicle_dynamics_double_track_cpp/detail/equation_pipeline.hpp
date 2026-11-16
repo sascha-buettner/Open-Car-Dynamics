@@ -17,6 +17,9 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
   // Iterate only the radial constitutive law with the current ODE-stage forces.
   // No previous-stage forces, prescribed tangential forces, or new states are used.
   if (p_.radial_lookup_enabled > .5) {
+    if (p_.radial_root_start_mode != "cold" && p_.radial_root_start_mode != "warm")
+      throw std::invalid_argument("Radial root start mode must be cold or warm");
+    auto previous_coefficients = radial_force_coefficient_Npm_;
     if (!radial_lookup_.configured())
       radial_lookup_.configure(
         p_.radial_grid_speeds, p_.radial_grid_pressures, p_.radial_grid_loads,
@@ -65,6 +68,14 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
                  ? (i < 2 ? p_.c_t_f : p_.c_t_r) * factor * p_.radial_stiffness_scale
                  : f * factor / radial_compliance_[i].values(f)[0] * p_.radial_stiffness_scale)
             : radial_k_Npm_[i];
+        if (p_.radial_root_start_mode == "warm") {
+          // The previous coefficient is only a seed; solve the current residual.
+          const double prior = previous_coefficients[i];
+          const double estimate = radial_force_coefficient_Npm_[i];
+          if (std::isfinite(prior) && prior > 0. && std::isfinite(estimate) && estimate > 0. &&
+              std::abs(prior / estimate - 1.) < .25)
+            radial_force_coefficient_Npm_[i] = prior;
+        }
       }
     }
   }
@@ -105,6 +116,8 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
   auto initial_coefficients = radial_force_coefficient_Npm_;
   auto initial_tangents = radial_k_Npm_;
   auto legacy_iteration = [&]() {
+    double_per_wheel_t previous_coefficients{};
+    double_per_wheel_t previous_residuals{};
     for (int iteration = 0; iteration < 40; ++iteration) {
       evaluate_radial_contact();
       if (p_.radial_lookup_enabled < .5 || p_.radial_conditioning_enabled > .5) break;
@@ -153,8 +166,28 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
       if (maximum < 1e-9) break;
       if (iteration == 39)
         throw std::runtime_error("Radial constitutive iteration did not converge");
-      for (int i = 0; i < 4; ++i)
-        radial_force_coefficient_Npm_[i] = .5 * (radial_force_coefficient_Npm_[i] + next[i]);
+      for (int i = 0; i < 4; ++i) {
+        const double current = radial_force_coefficient_Npm_[i];
+        const double residual = next[i] - current;
+        double update = .5 * (current + next[i]);
+        if (iteration > 0) {
+          const double delta = residual - previous_residuals[i];
+          if (std::abs(delta) > 1e-12 * std::max(1., std::abs(residual))) {
+            const double secant = current - residual *
+              (current - previous_coefficients[i]) / delta;
+            double upper = 2. * std::max(current, next[i]);
+            if (p_.belt_enabled > .5) {
+              const double mass = i < 2 ? p_.belt_mass_f : p_.belt_mass_r;
+              const double frequency = i < 2 ? p_.belt_frequency_f : p_.belt_frequency_r;
+              upper = std::min(upper, mass * std::pow(2. * M_PI * frequency, 2) * .999);
+            }
+            if (std::isfinite(secant) && secant > 0. && secant < upper) update = secant;
+          }
+        }
+        previous_coefficients[i] = current;
+        previous_residuals[i] = residual;
+        radial_force_coefficient_Npm_[i] = update;
+      }
     }
   };
   try {

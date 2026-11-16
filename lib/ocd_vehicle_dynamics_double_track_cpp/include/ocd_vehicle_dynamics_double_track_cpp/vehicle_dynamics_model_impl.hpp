@@ -403,6 +403,10 @@ void VehicleDynamicsDoubleTrackModel<TireModelT, AeroModelT>::declare_parameters
       std::vector<double>{}, tam::pmg::ParameterType::DOUBLE_ARRAY,
       "Explicit private radial lookup grid; stiffness is flattened speed, pressure, load");
   p_def_d("tire.radial_lookup.robust_solver.enabled", 0.0, &eqns_.p_.radial_robust_solver_enabled);
+  param_manager_->declare_parameter(
+    "vehicle_dynamics_double_track.tire.radial_lookup.root_start_mode",
+    &eqns_.p_.radial_root_start_mode, std::string{}, tam::pmg::ParameterType::STRING,
+    "Required radial root seed mode when lookup is active: cold or warm");
   p_def_d("tire.low_load_continuation.boundary_N", 0.0, &eqns_.p_.low_load_boundary_N);
   p_def_d("tire.contact.sampling_points", 1.0, &eqns_.p_.contact_sampling_points);
   p_def_d("tire.sidewall.enabled", 0.0, &eqns_.p_.sidewall_enabled);

@@ -26,6 +26,14 @@ int main()
     throw std::runtime_error("Public fixed aero baseline changed");
 
   p.attitude_enabled = 1.;
+  bool rejected_missing = false;
+  try {
+    model.evaluate(input);
+  } catch (const std::invalid_argument &) {
+    rejected_missing = true;
+  }
+  if (!rejected_missing)
+    throw std::runtime_error("Enabled attitude aero accepted missing configuration");
   p.attitude_lift_gain = p.attitude_center_gain = 1.;
   p.attitude_unsteady_gain = 1.;
   p.attitude_reference_z_m = 0.;

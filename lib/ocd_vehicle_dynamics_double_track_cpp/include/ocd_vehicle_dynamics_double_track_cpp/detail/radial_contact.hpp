@@ -20,6 +20,34 @@ void VehicleDynamicsDoubleTrackEqns<
   TireModelT, AeroModelT>::calculate_tire_spring_initial_compression_m()
 {
   if (p_.radial_lookup_enabled > .5) {
+    if (!(p_.radial_conditioning_enabled > .5)) {
+      // The reference depends on parameters, not the current integration stage.
+      // Build its compact signature once per evaluation instead of allocating
+      // the same vector separately for every wheel.
+      const std::array<double, 16> signature{
+        p_.m, p_.l, p_.l_f, p_.corner_weights_enabled, p_.atmosphere_Pa,
+        p_.corner_weights_kg[0], p_.inflation_reference_absolute_Pa[0],
+        p_.corner_weights_kg[1], p_.inflation_reference_absolute_Pa[1],
+        p_.corner_weights_kg[2], p_.inflation_reference_absolute_Pa[2],
+        p_.corner_weights_kg[3], p_.inflation_reference_absolute_Pa[3],
+        p_.radial_nominal_stiffness, p_.c_t_f, p_.c_t_r};
+      if (radial_compliance_reference_signature_.size() != signature.size() ||
+          !std::equal(signature.begin(), signature.end(),
+                      radial_compliance_reference_signature_.begin())) {
+        for (int j = 0; j < 4; ++j) {
+          const double f = p_.corner_weights_enabled > .5
+                             ? p_.corner_weights_kg[j] * G_CONST
+                             : p_.m * G_CONST * (j < 2 ? p_dep_.l_r : p_.l_f) / (2 * p_.l);
+          GenericRadialCompliance curve;
+          curve.reset(radial_lookup_, j >= 2, 0.,
+                      p_.inflation_reference_absolute_Pa[j] - p_.atmosphere_Pa);
+          radial_nominal_compression_m_[j] = p_.radial_nominal_stiffness > .5
+                                               ? f / (j < 2 ? p_.c_t_f : p_.c_t_r)
+                                               : curve.values(f)[0];
+        }
+        radial_compliance_reference_signature_.assign(signature.begin(), signature.end());
+      }
+    }
     for (int i = 0; i < 4; ++i) {
       const double load = p_.radial_conditioning_enabled > .5 && p_.radial_frozen_preload > .5
                             ? p_.radial_condition_load_N[i]
@@ -30,31 +58,8 @@ void VehicleDynamicsDoubleTrackEqns<
       if (p_.radial_conditioning_enabled > .5)
         imr_.tire_spring_initial_compression_m[i] =
           load / (radial_k_Npm_[i] / p_.radial_stiffness_scale);
-      else {
-        std::vector<double> signature{
-          p_.m, p_.l, p_.l_f, p_.corner_weights_enabled, p_.atmosphere_Pa};
-        for (int j = 0; j < 4; ++j) {
-          signature.push_back(p_.corner_weights_kg[j]);
-          signature.push_back(p_.inflation_reference_absolute_Pa[j]);
-        }
-        signature.push_back(p_.radial_nominal_stiffness);
-        signature.push_back(p_.c_t_f);
-        signature.push_back(p_.c_t_r);
-        if (signature != radial_compliance_reference_signature_) {
-          for (int j = 0; j < 4; ++j) {
-            const double f = p_.corner_weights_enabled > .5
-                               ? p_.corner_weights_kg[j] * G_CONST
-                               : p_.m * G_CONST * (j < 2 ? p_dep_.l_r : p_.l_f) / (2 * p_.l);
-            GenericRadialCompliance curve;
-            curve.reset(radial_lookup_, j >= 2, 0., p_.inflation_reference_absolute_Pa[j] - p_.atmosphere_Pa);
-            radial_nominal_compression_m_[j] = p_.radial_nominal_stiffness > .5
-                                                 ? f / (j < 2 ? p_.c_t_f : p_.c_t_r)
-                                                 : curve.values(f)[0];
-          }
-          radial_compliance_reference_signature_ = signature;
-        }
+      else
         imr_.tire_spring_initial_compression_m[i] = radial_nominal_compression_m_[i];
-      }
     }
     return;
   }

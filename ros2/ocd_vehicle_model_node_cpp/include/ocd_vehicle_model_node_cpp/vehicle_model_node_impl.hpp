@@ -28,9 +28,10 @@ VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::VehicleModelN
   std::unique_ptr<VEHICLE_T> && veh_model, const rclcpp::NodeOptions & options)
 : Node(std::string(node_name_), std::string(namespace_), options), veh_model_(std::move(veh_model))
 {
-  high_frequency_logging_ =
-    this->declare_parameter<bool>("enable_high_frequency_output", high_frequency_logging_);
-  double output_rate_hz = this->declare_parameter<double>("output_rate_hz", 100.0);
+  const auto publish_every_n_steps =
+    this->declare_parameter<std::int64_t>("publish_every_n_steps", -1);
+  if (publish_every_n_steps < 1)
+    throw std::invalid_argument("publish_every_n_steps must be positive");
 
   dt_comm_handler_ = std::make_shared<DT_COMM_HANDLER_T>(this);
   sa_comm_handler_ = std::make_shared<SA_COMM_HANDLER_T>(this);
@@ -82,19 +83,6 @@ VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::VehicleModelN
       &VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_update_callback,
       this));
 
-  if (!high_frequency_logging_) {
-    if (output_rate_hz <= 0.0) {
-      RCLCPP_ERROR(
-        this->get_logger(), "output_rate_hz must be > 0, got %f. Falling back to 100 Hz.",
-        output_rate_hz);
-      output_rate_hz = 100.0;
-    }
-    output_timer_ = tam::create_timer(
-      this, std::chrono::duration<double>(1.0 / output_rate_hz),
-      std::bind(
-        &VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::output_callback, this));
-  }
-
   auto qos = tam::ros::get_qos(tam::ros::TopicType::DEFAULT);
 
   sub_external_influences_ = this->create_subscription<ocd_interfaces::msg::ExternalInfluences>(
@@ -133,20 +121,20 @@ template <
 void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_update_callback()
 {
   rclcpp::Time callback_time = this->get_clock()->now();
-  const std::chrono::microseconds nominal_step =
-    std::chrono::duration_cast<std::chrono::microseconds>(timer_period_s_);
+  const std::chrono::nanoseconds nominal_step =
+    std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period_s_);
 
-  std::chrono::microseconds callback_dt = nominal_step;
+  std::chrono::nanoseconds callback_dt = nominal_step;
   if (initial_cycle_) {
     first_callback_time_ = callback_time;
     last_callback_time_ = callback_time;
   } else {
-    callback_dt = (callback_time - last_callback_time_).to_chrono<std::chrono::microseconds>();
+    callback_dt = (callback_time - last_callback_time_).to_chrono<std::chrono::nanoseconds>();
     last_callback_time_ = callback_time;
   }
 
-  const std::chrono::microseconds accumulated_skew =
-    (callback_time - first_callback_time_).to_chrono<std::chrono::microseconds>() -
+  const std::chrono::nanoseconds accumulated_skew =
+    (callback_time - first_callback_time_).to_chrono<std::chrono::nanoseconds>() -
     sim_time_since_start_;
 
   // Compensate the skew by stepping the model once, or twice to catch up to wall time
@@ -168,8 +156,13 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_up
 
   if (has_new_external_influence_) update_external_influences();
 
+  const auto publish_every_n_steps = this->get_parameter("publish_every_n_steps").as_int();
+  if (publish_every_n_steps < 1)
+    throw std::invalid_argument("publish_every_n_steps must be positive");
+  const auto steps_before_callback = accepted_steps_;
   for (int i = 0; i < num_steps; ++i) {
     veh_model_->step();
+    ++accepted_steps_;
     if (compact_state_input_logging_) tsl_pub_->trigger();
     dt_comm_handler_->update_delay_timer(nominal_step);
     sa_comm_handler_->update_delay_timer(nominal_step);
@@ -180,11 +173,20 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_up
   logger_->log(
     "node/model_step_time_us",
     std::chrono::duration_cast<std::chrono::microseconds>(t_stop - t_start).count());
-  logger_->log("node/time_between_callbacks_us", callback_dt.count());
-  logger_->log("node/accumulated_skew_us", accumulated_skew.count());
+  logger_->log(
+    "node/time_between_callbacks_us",
+    std::chrono::duration<double, std::micro>(callback_dt).count());
+  logger_->log(
+    "node/accumulated_skew_us",
+    std::chrono::duration<double, std::micro>(accumulated_skew).count());
   logger_->log("node/num_steps", num_steps);
   logger_->log("node/double_step_count", double_step_count_);
   logger_->log("node/filtered_double_step_ratio", filtered_double_step_ratio_);
+
+  // A catch-up callback can advance two steps. Publish once at its accepted
+  // state when it crosses an N-step boundary, preserving one ROS timestamp.
+  const auto interval = static_cast<std::uint64_t>(publish_every_n_steps);
+  if (accepted_steps_ / interval > steps_before_callback / interval) output_callback();
 
   // Warn once per second if the skew exceeds 0.1 s despite the compensation.
   if (std::chrono::abs(accumulated_skew) > std::chrono::milliseconds(100)) {
@@ -201,10 +203,6 @@ void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::model_up
       filtered_double_step_ratio_ * 100.0);
   }
 
-  if (high_frequency_logging_) {
-    output_callback();
-  }
-
   // Mark the first callback done so subsequent cycles measure real elapsed time against the anchor
   // instead of re-seeding first_callback_time_/last_callback_time_ every cycle.
   initial_cycle_ = false;
@@ -215,7 +213,7 @@ template <
   interfaces::concepts::CommunicationHandler SA_COMM_HANDLER_T>
 void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::output_callback()
 {
-  if (initial_cycle_) return;
+  if (accepted_steps_ == 0) return;
   typename types::VehicleModelOutput vehicle_model_output = veh_model_->get_vehicle_model_output();
   nav_msgs::msg::Odometry odom =
     tam::ocd::helpers::type_conversion::toMsg(vehicle_model_output.vehicle_dynamics_output);
@@ -378,6 +376,7 @@ template <
 void VehicleModelNode<VEHICLE_T, DT_COMM_HANDLER_T, SA_COMM_HANDLER_T>::reset()
 {
   veh_model_->reset();
+  accepted_steps_ = 0;
   dt_comm_handler_->reset_input_delay();
   sa_comm_handler_->reset_input_delay();
 }

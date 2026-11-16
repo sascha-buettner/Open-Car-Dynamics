@@ -146,6 +146,7 @@ class VehicleDynamicsDoubleTrackEqns
     double load_memory_release_tau_s{0.};
     double fy_radial_mode{1.0}, fy_relaxation_strength{1.0};
     double radial_robust_solver_enabled{1.0};
+    std::string radial_root_start_mode{};
     double force_conditioning_enabled{1.0};
     double_per_wheel_t force_condition_kappa{}, force_condition_alpha{}, radial_condition_fy_N{};
     double radial_speed_mps{1.0}, radial_softening_fraction{1.0};

@@ -4,6 +4,7 @@
 
 #include <builtin_interfaces/msg/duration.hpp>
 #include <geometry_msgs/msg/accel_with_covariance_stamped.hpp>
+#include <cstdint>
 #include <memory>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -65,7 +66,7 @@ protected:
 
 private:
   bool initial_cycle_{true};
-  bool high_frequency_logging_{false};
+  std::uint64_t accepted_steps_{0};
   bool compact_state_input_logging_{false};
   std::unique_ptr<VEHICLE_T> veh_model_{};
 
@@ -77,7 +78,7 @@ private:
   // Anchors for the accumulated skew: total integrated simulation time and the node-clock time of
   // the first callback (both seeded on the first callback, detected via initial_cycle_).
   // accumulated_skew = (now - first_callback_time_) - sim_time_since_start_.
-  std::chrono::microseconds sim_time_since_start_{};
+  std::chrono::nanoseconds sim_time_since_start_{};
   rclcpp::Time first_callback_time_{};
 
   /// Generic communication handlers for abstracting the input/output types of the drivetrain and
@@ -87,7 +88,6 @@ private:
 
   OnSetParametersCallbackHandle::SharedPtr callback_handle_{};
   rclcpp::TimerBase::SharedPtr model_update_timer_{};
-  rclcpp::TimerBase::SharedPtr output_timer_{};
   tam::pmg::ParamManagerComposer::SharedPtr param_manager_composer_{};
   tam::tsl::ValueLogger::SharedPtr logger_{};
   tam::tsl::LoggerComposer::SharedPtr logger_composer_{};

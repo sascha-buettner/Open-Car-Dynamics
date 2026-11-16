@@ -12,8 +12,15 @@ class StageRoadCache final : public types::RoadSurface
 {
   std::shared_ptr<const types::RoadSurface> source_;
   mutable std::map<std::array<double, 2>, types::RoadSurfaceSample> samples_;
-  mutable std::map<std::array<double, 3>, types::RoadSurfaceSample> footprints_;
   mutable std::map<std::array<double, 5>, types::RoadSurfaceSample> contacts_;
+  struct FastFootprint
+  {
+    std::array<double, 3> key{};
+    types::RoadSurfaceSample value{};
+    bool valid{false};
+  };
+  mutable std::array<FastFootprint, 32> fast_footprints_{};
+  mutable std::size_t footprint_cursor_{0};
   mutable bool prepared_{false};
   mutable std::array<double, 3> pose_{};
 
@@ -21,14 +28,15 @@ public:
   explicit StageRoadCache(std::shared_ptr<const types::RoadSurface> s) : source_(std::move(s)) {}
   void prepare(double x, double y, double psi) const override
   {
+    footprint_cursor_ = 0;
     std::array<double, 3> p{x, y, psi};
     if (!prepared_ || p != pose_) {
       source_->prepare(x, y, psi);
       pose_ = p;
       prepared_ = true;
       samples_.clear();
-      footprints_.clear();
       contacts_.clear();
+      for (auto & entry : fast_footprints_) entry.valid = false;
     }
   }
   types::RoadSurfaceSample sample(double x, double y) const override
@@ -41,9 +49,15 @@ public:
   types::RoadSurfaceSample footprint(double x, double y, double r) const override
   {
     auto key = std::array<double, 3>{x, y, r};
-    auto it = footprints_.find(key);
-    if (it != footprints_.end()) return it->second;
-    return footprints_.emplace(key, source_->footprint(x, y, r)).first->second;
+    auto & fast = fast_footprints_[footprint_cursor_++ % fast_footprints_.size()];
+    if (fast.valid && fast.key == key) return fast.value;
+    for (const auto & entry : fast_footprints_)
+      if (entry.valid && entry.key == key) {
+        fast = entry;
+        return fast.value;
+      }
+    fast = {key, source_->footprint(x, y, r), true};
+    return fast.value;
   }
   types::RoadSurfaceSample tire_contact(
     double x, double y, double h, double r, double m) const override

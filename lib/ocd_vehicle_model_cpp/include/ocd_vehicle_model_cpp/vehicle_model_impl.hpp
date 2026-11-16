@@ -48,9 +48,12 @@ void VEHICLE_T::step()
   // Init local variables
   const double h = param_manager_->get_value("integration_step_size_s").as_double();
   const auto substeps = param_manager_->get_value("integration_substeps").as_int();
+  const auto integration_scheme = param_manager_->get_value("integration_scheme").as_string();
   if (!std::isfinite(h) || h <= 0. || substeps < 1 || substeps > 8)
     throw std::invalid_argument(
       "Integration requires positive finite dt and 1..8 synchronous substeps");
+  if (integration_scheme != "dopri45" && integration_scheme != "midpoint")
+    throw std::invalid_argument("integration_scheme must be dopri45 or midpoint");
 
   state_input_recording_ = param_manager_->get_value("recording.state_input_only").as_bool();
 #ifdef EAV24_STEP_TIMING
@@ -92,26 +95,33 @@ void VEHICLE_T::step()
   debug_container_->log("integration_step_size_s", h);
   debug_container_->log("integration_substeps", static_cast<double>(substeps));
 
-  // Bind the function for the integrator
-  std::function<state_vector_t(double, state_vector_t)> bound_ode =
-    std::bind(&VEHICLE_T::ode, this, std::placeholders::_1, std::placeholders::_2);
+  // Only DoPri needs type erasure; midpoint calls the same ODE directly.
+  std::function<state_vector_t(double, state_vector_t)> bound_ode;
+  if (integration_scheme == "dopri45")
+    bound_ode = std::bind(&VEHICLE_T::ode, this, std::placeholders::_1, std::placeholders::_2);
 
   // Calculate the new x - Aka do the integration step
   // Every substep advances the complete coupled state and queries contact at
-  // each stage. The external control/readout clock remains h (normally 800 Hz).
+  // each stage. The external control/readout clock remains h.
   const double inner_h = h / static_cast<double>(substeps);
 #ifdef EAV24_STEP_TIMING
   const auto integrator_start = TimingClock::now();
 #endif
-  for (std::int64_t i = 0; i < substeps; ++i)
-    x = tam::helpers::numerical::integration_step_DoPri45<state_vector_t>(
-      bound_ode, i * inner_h, x, inner_h);
+  for (std::int64_t i = 0; i < substeps; ++i) {
+    if (integration_scheme == "midpoint") {
+      const auto k1 = ode(i * inner_h, x);
+      const auto k2 = ode((i + .5) * inner_h, x + .5 * inner_h * k1);
+      x += inner_h * k2;
+    } else {
+      x = tam::helpers::numerical::integration_step_DoPri45<state_vector_t>(
+        bound_ode, i * inner_h, x, inner_h);
+    }
+  }
 #ifdef EAV24_STEP_TIMING
   if (step_timing_active_) step_timing_.integrator_us = elapsed_us(integrator_start);
 #endif
 
-  // Refresh derivatives and outputs at the accepted state. Dormand-Prince's
-  // final evaluated stage is not necessarily the accepted state.
+  // Both methods refresh derivatives and outputs at the accepted state.
 #ifdef EAV24_STEP_TIMING
   const auto refresh_start = TimingClock::now();
 #endif
@@ -371,6 +381,9 @@ void VEHICLE_T::declare_parameters()
   param_manager_->declare_parameter(
     "integration_substeps", std::int64_t{1}, tam::pmg::ParameterType::INTEGER,
     "Synchronous full-state internal integration steps per external simulation tick (1..8)");
+  param_manager_->declare_parameter(
+    "integration_scheme", std::string{}, tam::pmg::ParameterType::STRING,
+    "Required integration method: dopri45 or midpoint; selectable between steps");
 
   // Declare parameters for the initial states of all submodels
   for (std::size_t i = 0; i < VD_MODEL_T::k_state_vector_length; i++) {
@@ -460,6 +473,11 @@ void VEHICLE_T::record_state_and_inputs()
   vector_input("external_torque_Nm", recorded_external_influences_.external_torque_Nm);
   vector_input("wind_mps", recorded_external_influences_.wind_mps);
   logger.log("input/brake_friction_scale", recorded_brake_scale_);
+  if constexpr (requires { drivetrain_model_.get_recorded_auxiliary_input(); }) {
+    auto auxiliary = drivetrain_model_.get_recorded_auxiliary_input();
+    for (int i = 0; i < 4; ++i)
+      logger.log("input/drivetrain_auxiliary/" + std::to_string(i), auxiliary[i]);
+  }
 }
 template <
   interfaces::concepts::DrivetrainModel DT_MODEL_T,
@@ -517,6 +535,12 @@ void VEHICLE_T::replay_recorded_boundary(const std::map<std::string, double> & r
   vector("external_force_N", external_influences_.external_force_N);
   vector("external_torque_Nm", external_influences_.external_torque_Nm);
   vector("wind_mps", external_influences_.wind_mps);
+  if constexpr (requires { drivetrain_model_.get_recorded_auxiliary_input(); }) {
+    auto auxiliary = drivetrain_model_.get_recorded_auxiliary_input();
+    for (int i = 0; i < 4; ++i)
+      auxiliary[i] = require("input/drivetrain_auxiliary/" + std::to_string(i));
+    drivetrain_model_.set_auxiliary_input(auxiliary);
+  }
   replay_brake_scale_ = require("input/brake_friction_scale");
   if (replay_brake_scale_ < 0.) throw std::domain_error("Negative recorded brake friction scale");
   replay_boundary_ = true;
