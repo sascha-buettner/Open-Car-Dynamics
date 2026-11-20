@@ -43,6 +43,11 @@ public:
   {
     eqns_.road_surface_ = std::move(surface);
   }
+  auto radial_solver_seed() const { return eqns_.radial_force_coefficient_Npm_; }
+  void restore_radial_solver_seed(const tam::types::common::DataPerWheel<double> & seed)
+  {
+    eqns_.radial_force_coefficient_Npm_ = seed;
+  }
 #ifdef EAV24_STEP_TIMING
   void begin_step_timing(bool enabled) { eqns_.begin_step_timing(enabled); }
   VehicleDynamicsStepTiming get_step_timing() const { return eqns_.step_timing_; }

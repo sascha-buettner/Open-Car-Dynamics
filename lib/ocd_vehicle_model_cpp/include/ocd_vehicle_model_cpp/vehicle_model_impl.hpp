@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ocd_vehicle_model_base_cpp/base_class.hpp"
+#include "ocd_vehicle_dynamics_model_base_cpp/radial_convergence_error.hpp"
 #include "vehicle_model.hpp"
 namespace tam::ocd
 {
@@ -48,6 +49,9 @@ void VEHICLE_T::step()
   // Init local variables
   const double h = param_manager_->get_value("integration_step_size_s").as_double();
   const auto substeps = param_manager_->get_value("integration_substeps").as_int();
+  const auto retry_limit = param_manager_->get_value("integration_radial_retry_limit").as_int();
+  if (retry_limit < 0 || retry_limit > 7)
+    throw std::invalid_argument("integration_radial_retry_limit must be between 0 and 7");
   const auto integration_scheme = param_manager_->get_value("integration_scheme").as_string();
   if (!std::isfinite(h) || h <= 0. || substeps < 1 || substeps > 8)
     throw std::invalid_argument(
@@ -103,32 +107,63 @@ void VEHICLE_T::step()
   // Calculate the new x - Aka do the integration step
   // Every substep advances the complete coupled state and queries contact at
   // each stage. The external control/readout clock remains h.
-  const double inner_h = h / static_cast<double>(substeps);
+  auto integrate = [&](std::int64_t count) {
+    const double inner_h = h / static_cast<double>(count);
 #ifdef EAV24_STEP_TIMING
-  const auto integrator_start = TimingClock::now();
+    const auto integrator_start = TimingClock::now();
 #endif
-  for (std::int64_t i = 0; i < substeps; ++i) {
-    if (integration_scheme == "midpoint") {
-      const auto k1 = ode(i * inner_h, x);
-      const auto k2 = ode((i + .5) * inner_h, x + .5 * inner_h * k1);
-      x += inner_h * k2;
-    } else {
-      x = tam::helpers::numerical::integration_step_DoPri45<state_vector_t>(
-        bound_ode, i * inner_h, x, inner_h);
+    for (std::int64_t i = 0; i < count; ++i) {
+      if (integration_scheme == "midpoint") {
+        const auto k1 = ode(i * inner_h, x);
+        const auto k2 = ode((i + .5) * inner_h, x + .5 * inner_h * k1);
+        x += inner_h * k2;
+      } else {
+        x = tam::helpers::numerical::integration_step_DoPri45<state_vector_t>(
+          bound_ode, i * inner_h, x, inner_h);
+      }
     }
-  }
 #ifdef EAV24_STEP_TIMING
-  if (step_timing_active_) step_timing_.integrator_us = elapsed_us(integrator_start);
+    if (step_timing_active_) step_timing_.integrator_us = elapsed_us(integrator_start);
 #endif
 
-  // Both methods refresh derivatives and outputs at the accepted state.
+    // Both methods refresh derivatives and outputs at the accepted state.
 #ifdef EAV24_STEP_TIMING
-  const auto refresh_start = TimingClock::now();
+    const auto refresh_start = TimingClock::now();
 #endif
-  ode(h, x);
+    ode(h, x);
 #ifdef EAV24_STEP_TIMING
-  if (step_timing_active_) step_timing_.refresh_us = elapsed_us(refresh_start);
+    if (step_timing_active_) step_timing_.refresh_us = elapsed_us(refresh_start);
 #endif
+  };
+  std::int64_t used_substeps = substeps;
+  if (retry_limit == 0) {
+    integrate(substeps);
+  } else if constexpr (requires { vehicle_dynamics_model_.radial_solver_seed(); }) {
+    const state_vector_t initial_state = x;
+    const auto steering_load = steering_load_torque_per_wheel_Nm_;
+    const auto radial_seed = vehicle_dynamics_model_.radial_solver_seed();
+    for (std::int64_t attempt = 0; ; ++attempt) {
+      used_substeps = substeps * (attempt + 1);
+      try {
+        integrate(used_substeps);
+        break;
+      } catch (const vehicle_dynamics::RadialConvergenceError &) {
+        // Restart this outer tick with the same state, input and clock. The new
+        // partition moves the quadrature points and checks the same force law.
+        ++rejected_radial_partitions_;
+        x = initial_state;
+        set_state_vector_of_models(x);
+        steering_load_torque_per_wheel_Nm_ = steering_load;
+        vehicle_dynamics_model_.restore_radial_solver_seed(radial_seed);
+        if (attempt >= retry_limit) throw;
+      }
+    }
+  } else {
+    throw std::invalid_argument("The vehicle dynamics model does not support radial retries");
+  }
+  debug_container_->log("integration_substeps_used", static_cast<double>(used_substeps));
+  debug_container_->log("integration_rejected_radial_partitions",
+                        static_cast<double>(rejected_radial_partitions_));
   integration_time_s_ += h;
 
   model_output_.vehicle_dynamics_output = vehicle_dynamics_output_;
@@ -313,6 +348,7 @@ template <
 void VEHICLE_T::reset()
 {
   integration_time_s_ = 0.;
+  rejected_radial_partitions_ = 0;
   excitation_onset_ = -1.;
   excitation_release_ = -1.;
   excitation_braking_ = false;
@@ -384,6 +420,10 @@ void VEHICLE_T::declare_parameters()
   param_manager_->declare_parameter(
     "integration_scheme", std::string{}, tam::pmg::ParameterType::STRING,
     "Required integration method: dopri45 or midpoint; selectable between steps");
+
+  param_manager_->declare_parameter(
+    "integration_radial_retry_limit", std::int64_t{0}, tam::pmg::ParameterType::INTEGER,
+    "Maximum additional partitions of a rejected tire radial solve per outer integration tick");
 
   // Declare parameters for the initial states of all submodels
   for (std::size_t i = 0; i < VD_MODEL_T::k_state_vector_length; i++) {

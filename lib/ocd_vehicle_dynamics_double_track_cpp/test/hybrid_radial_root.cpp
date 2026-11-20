@@ -18,7 +18,14 @@ int main()
           return Eigen::Vector3d(kind == 0 ? x[0] + 1. : (x[0] < 2. ? -1. : 1.),
                                  x[1] - 3., x[2] - 4.);
         }, Eigen::Vector3d(1.5, 2., 3.), lower, upper);
-    } catch (const std::runtime_error &) { rejected = true; }
+    } catch (const tam::ocd::vehicle_dynamics::RadialConvergenceError &) { rejected = true; }
     if (!rejected) throw std::runtime_error("Hybrid accepted missing or discontinuous root");
   }
+  try {
+    (void)hybrid_radial_root(
+      [](const Eigen::Vector3d &x) { return x; }, exact, upper, lower);
+  } catch (const std::invalid_argument &) {
+    return 0;
+  }
+  throw std::runtime_error("Invalid radial domain was accepted");
 }

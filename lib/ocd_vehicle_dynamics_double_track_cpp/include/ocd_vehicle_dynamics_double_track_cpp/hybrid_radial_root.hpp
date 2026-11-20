@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include "ocd_vehicle_dynamics_model_base_cpp/radial_convergence_error.hpp"
 #include <eigen3/unsupported/Eigen/NonLinearOptimization>
 namespace tam::ocd::vehicle_dynamics {
 // MINPACK-style Powell hybrid on bounded transformed coordinates. Solver status
@@ -38,6 +39,6 @@ Eigen::Vector3d hybrid_radial_root(Function residual,Eigen::Vector3d seed,
    if(original.allFinite()&&original.lpNorm<Eigen::Infinity>()<3e-10)return current;
   }catch(const std::exception&){}
  }
- throw std::runtime_error("Powell hybrid did not satisfy original coupled residual");
+ throw RadialConvergenceError("Powell hybrid did not satisfy original coupled residual");
 }
 }

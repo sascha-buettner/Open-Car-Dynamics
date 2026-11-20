@@ -380,6 +380,8 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_intermedi
             throw std::runtime_error("Final coupled residual rejected");
           if(!(desired[1]>.05&&desired[2]>.05&&desired[2]<5.))
             throw std::domain_error("Radial softening outside positive-force domain after coupled solve");
+        }catch(const RadialConvergenceError &failure){
+          throw RadialConvergenceError(std::string("Radial TOMS748: coupled root failed: ")+failure.what());
         }catch(const std::domain_error &failure){
           if(std::string(failure.what()).find("Radial softening outside positive-force domain")!=std::string::npos)throw;
           throw std::runtime_error(std::string("Radial TOMS748: coupled root failed: ")+failure.what());

@@ -5,8 +5,8 @@
 
 #ifdef EAV24_STEP_TIMING
 #include <chrono>
-#include <cstdint>
 #endif
+#include <cstdint>
 #include <eigen3/Eigen/Dense>
 #include <functional>
 #include <map>
@@ -39,6 +39,7 @@ class VehicleModel : public auxiliary::conditional_compilation::SaHelperVehicleM
 {
 private:
   double integration_time_s_{0.};
+  std::uint64_t rejected_radial_partitions_{0};
   bool state_input_recording_{false};
 #ifdef EAV24_STEP_TIMING
   struct StepTiming
