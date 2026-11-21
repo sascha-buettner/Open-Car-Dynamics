@@ -93,7 +93,11 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_velocity_
     if(p_.ring_enabled>.5){
       const double d=imr_.effective_steering_angle_per_wheel_rad[i],c=std::cos(d),s=std::sin(d);
       const double vx=x_vec_[x::ring_vx_FL_mps+i],vy=x_vec_[x::ring_vy_FL_mps+i];
-      imr_.velocity_wheel_over_ground_tire_frame_mps[i]={c*vx+s*vy,-s*vx+c*vy+imr_.dynamic_tire_radius_m[i]*x_vec_[x::ring_omega_x_FL_radps+i]};
+      const double vertical=x_vec_[x::v_z_belt_FL_mps+i]+
+        ((p_.kinematics_enabled>.5&&p_.material_velocity_enabled>.5)
+          ?(kinematic_jac_z_[i]-1.)*kinematic_q_velocity_mps_[i]:0.);
+      imr_.velocity_wheel_over_ground_tire_frame_mps[i]=contact_frames_[i].velocity({
+        c*vx+s*vy,-s*vx+c*vy+imr_.dynamic_tire_radius_m[i]*x_vec_[x::ring_omega_x_FL_radps+i],vertical});
       imr_.velocity_tire_rotation_mps[i]=imr_.dynamic_tire_radius_m[i]*x_vec_[x::ring_omega_y_FL_radps+i];
     }
     imr_.velocity_tire_rotation_mps[i] *= contact_frames_[i].spin_lever_scale;
@@ -144,9 +148,11 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT, AeroModelT>::calculate_tire_forc
 {
   tire_mx_Nm_ = {0., 0., 0., 0.};
   tire_mz_Nm_ = {0., 0., 0., 0.};
-  // Zero out tire forces when at rest
+  // The ring may still have contact motion while the hub is stationary.
+  // Only the legacy rigid-wheel branch uses this body/wheel rest shortcut.
   if (
-    p_.force_conditioning_enabled < .5 && std::pow(x_vec_[x::v_x_mps], 2) < 0.001 &&
+    p_.ring_enabled < .5 && p_.force_conditioning_enabled < .5 &&
+    std::pow(x_vec_[x::v_x_mps], 2) < 0.001 &&
     std::pow(x_vec_[x::v_y_mps], 2) < 0.001 &&
     std::pow(wheel_speeds_radps_.front_left, 2) < 0.001 &&
     std::pow(wheel_speeds_radps_.front_right, 2) < 0.001 &&

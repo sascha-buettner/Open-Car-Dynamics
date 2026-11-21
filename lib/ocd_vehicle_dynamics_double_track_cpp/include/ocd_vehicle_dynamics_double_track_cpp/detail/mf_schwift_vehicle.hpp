@@ -26,11 +26,9 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT,AeroModelT>::calculate_ring_react
     const double c=std::cos(delta),s=std::sin(delta),mb=i<2?p_.belt_mass_f:p_.belt_mass_r;
     const double friction_x=imr_.tire_forces_N[i][0],friction_y=imr_.tire_forces_N[i][1];
     const double fx=friction_x+imr_.contact_force_x_N[i],fy=friction_y+imr_.contact_force_y_N[i];
-    const double Fxt=c*friction_x+s*friction_y,Fyt=-s*friction_x+c*friction_y,R=imr_.dynamic_tire_radius_m[i];
+    const double Fyt=-s*friction_x+c*friction_y,R=imr_.dynamic_tire_radius_m[i];
     const double qx=x_vec_[x::ring_x_FL_m+i],qy=x_vec_[x::ring_y_FL_m+i];
     const double xv=x_vec_[x::ring_vx_FL_mps+i],yv=x_vec_[x::ring_vy_FL_mps+i];
-    const double wx=i<2?p_.l_f:-p_dep_.l_r,
-                 wy=(i%2?-1.:1.)*(i<2?p_.b_f:p_.b_r)/2.;
     const double r=x_vec_[x::psi_dot_radps];
     const double joint_rate=p_.kinematics_enabled>.5?kinematic_q_velocity_mps_[i]:0.;
     const double hub_p=x_vec_[x::phi_dot_radps]+(p_.kinematics_enabled>.5?kinematic_angjac_x_[i]*joint_rate:0.);
@@ -76,7 +74,10 @@ void VehicleDynamicsDoubleTrackEqns<TireModelT,AeroModelT>::calculate_ring_react
     // A circular ring is invariant under spin: the conservative normal
     // envelope has no windup-coordinate torque. Tangential traction and MF
     // rolling resistance act on spin; normal road gradients act on translation.
-    const double Mt=-Fxt*R-imr_.tire_rolling_resistance_N[i]*R*std::tanh(bt*R/.1);
+    // The force is specified in the local contact plane, whose rolling lever
+    // is shorter on a slope. Match the same lever used for ring spin velocity.
+    const double Mt=-imr_.tire_forces_tire_frame_N[i][0]*R*contact_frames_[i].spin_lever_scale
+      -imr_.tire_rolling_resistance_N[i]*R*std::tanh(bt*R/.1);
     const double Mp=tire_mz_Nm_[i]+imr_.contact_yaw_moment_Nm[i];
     // Gyroscopic matrix is skew: it does no work. This open modal-support
     // approximation does not reproduce proprietary rotating-damper corrections.
